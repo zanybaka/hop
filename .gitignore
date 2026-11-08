@@ -1,0 +1,16 @@
+# Рабочие материалы, которые не публикуются
+/.ai-task/
+/AGENTS.md
+/research/
+/docs/prd.md
+/docs/techspec.md
+
+# Зависимости и сборка
+node_modules/
+dist/
+*.log
+
+# Система и редакторы
+.DS_Store
+.idea/
+.vscode/
