@@ -1,0 +1,9 @@
+/* Настройка шрифтов из исходников сайта владельца. */
+@font-face { font-family: 'PT Serif'; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/pt-serif-400.woff2) format('woff2'); }
+@font-face { font-family: 'PT Serif'; font-style: normal; font-weight: 700; font-display: swap; src: url(fonts/pt-serif-700.woff2) format('woff2'); }
+@font-face { font-family: 'PT Serif Georgia'; font-weight: 400; src: local('Georgia'); size-adjust: 100.49%; ascent-override: 103.39%; descent-override: 28.46%; line-gap-override: 0%; }
+@font-face { font-family: 'PT Serif Georgia'; font-weight: 700; src: local('Georgia'); size-adjust: 108.57%; ascent-override: 95.70%; descent-override: 26.34%; line-gap-override: 0%; }
+@font-face { font-family: 'PT Serif Times'; font-weight: 400; src: local('Times New Roman'); size-adjust: 110.28%; ascent-override: 94.22%; descent-override: 25.93%; line-gap-override: 0%; }
+@font-face { font-family: 'PT Serif Times'; font-weight: 700; src: local('Times New Roman'); size-adjust: 119.14%; ascent-override: 87.21%; descent-override: 24.01%; line-gap-override: 0%; }
+:root{--font-text:"PT Serif","PT Serif Georgia","PT Serif Times",serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+body{font-family:var(--font-text);line-height:1.6}h1,h2,h3{line-height:1.2}button,input,select,textarea{font:inherit}

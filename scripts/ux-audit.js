@@ -2,7 +2,7 @@
   const issues=[];
   const modal=document.querySelector('dialog[open]');
   const root=modal || document;
-  const visible=el=>el.getClientRects().length && getComputedStyle(el).visibility!=='hidden' && !el.closest('[hidden]');
+  const visible=el=>el && el.getClientRects().length && getComputedStyle(el).visibility!=='hidden' && !el.closest('[hidden]');
   const name=el=>el.id || el.getAttribute('aria-label') || el.textContent.trim().slice(0,60) || el.tagName;
   const mobile=innerWidth<=760 || (innerWidth<=900 && innerHeight<=600);
   for(const el of document.querySelectorAll('h1,h2,h3,p,[role=heading]')) {
@@ -65,7 +65,7 @@
     }
 
   }
-  const editor=document.querySelector('#editor');
+  const editor=document.querySelector('#editor, #draft');
   if(visible(editor) && !modal && editor.getBoundingClientRect().height<48)issues.push({rule:'editor-collapsed',height:editor.getBoundingClientRect().height});
   if(document.documentElement.scrollWidth>innerWidth || document.documentElement.scrollHeight>innerHeight+1)issues.push({rule:'document-overflow'});
   return {width:innerWidth,height:innerHeight,theme:document.documentElement.dataset.theme,dialog:modal?.id || null,focus:name(active),issues,controls};
