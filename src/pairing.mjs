@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 const capability = /^[a-f0-9]{64}$/;
+const shortCodeWrapper = /^[a-f0-9]{184}$/;
 export const MAX_SIGNAL_BYTES = 65_536;
 const digest = token => createHash('sha256').update(token).digest('hex');
 const issue = () => randomBytes(32).toString('hex');
@@ -20,13 +21,19 @@ export function createPairing({ now = Date.now, offerLifetime = 300_000, maxOffe
   const offers = new Set();
   const invitations = new Map();
   const holders = new Map();
+  const codes = new Map();
+
+  function removeInvitation(entry) {
+    invitations.delete(entry.invitation);
+    if (entry.code) codes.delete(entry.code);
+  }
 
   function sweep() {
     const time = now();
     for (const entry of offers) {
       if (entry.expiresAt > time) continue;
       offers.delete(entry);
-      invitations.delete(entry.invitation);
+      removeInvitation(entry);
       holders.delete(entry.owner);
       if (entry.recipient) holders.delete(entry.recipient);
     }
@@ -77,12 +84,28 @@ export function createPairing({ now = Date.now, offerLifetime = 300_000, maxOffe
       sweep();
       const entry = invitations.get(checkedDigest(invitation));
       if (!entry) throw new PairingError('missing');
-      invitations.delete(entry.invitation);
+      removeInvitation(entry);
       const recipient = issue();
       entry.recipient = digest(recipient);
       entry.state = 'joined';
       holders.set(entry.recipient, { entry, role: 'recipient' });
       return { recipient, expiresAt: entry.expiresAt };
+    },
+    registerCode(owner, { lookup: code, wrapper } = {}) {
+      const entry = owned(owner);
+      if (entry.state !== 'offered') throw new PairingError('conflict');
+      if (typeof code !== 'string' || !capability.test(code) ||
+          typeof wrapper !== 'string' || !shortCodeWrapper.test(wrapper)) throw new PairingError('invalid');
+      if (entry.code === code) return {};
+      if (entry.code) throw new PairingError('registered');
+      if (codes.has(code)) throw new PairingError('conflict');
+      entry.code = code;
+      codes.set(code, wrapper);
+      return {};
+    },
+    readCode(code) {
+      sweep();
+      return codes.get(code);
     },
     status(token) { return snapshot(lookup(token)); },
     decide(owner, state) {
@@ -95,7 +118,7 @@ export function createPairing({ now = Date.now, offerLifetime = 300_000, maxOffe
     cancel(owner) {
       const entry = owned(owner);
       if (entry.state !== 'offered' && entry.state !== 'joined') throw new PairingError('conflict');
-      invitations.delete(entry.invitation);
+      removeInvitation(entry);
       entry.state = 'cancelled';
       return snapshot({ entry, role: 'owner' });
     },

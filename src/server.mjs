@@ -97,11 +97,16 @@ export async function startServer(directory, {
         return json(200, codes.evaluate(trustLoopbackProxy ? forwardedAddress : directAddress, (await jsonBody(req)) ?? {}));
       }
       const codePath = /^\/api\/v1\/short-code\/([a-f0-9]{64})$/.exec(path)?.[1];
-      if (codePath && method === 'GET') return json(200, codes.read(codePath));
+      if (codePath && method === 'GET') {
+        const wrapper = pairing.readCode(codePath);
+        return json(200, wrapper ? { wrapper, kind: 'pair' } : codes.read(codePath));
+      }
       if (codePath && method === 'POST') {
         if (!bearer) return json(403, { error: 'forbidden' });
         const owner = createHash('sha256').update(bearer).digest('hex');
-        codes.register(codePath, owner, (await jsonBody(req)) ?? {});
+        const body = (await jsonBody(req)) ?? {};
+        if (pairing.readCode(body.lookup)) throw new CodeError('conflict');
+        codes.register(codePath, owner, body);
         return json(201, {});
       }
       const settings = /^\/api\/v1\/exchange\/([a-f0-9]{64})(?:\/(mode|invite|one-use|claim|revoke-write|member-key))?$/.exec(path);
@@ -149,7 +154,7 @@ export async function startServer(directory, {
       }
       const receipt = /^\/api\/v1\/receipts\/([a-f0-9-]{36})$/.exec(path);
       if (receipt && method === 'POST') return json(200, await storage.confirm(receipt[1]));
-      const route = /^\/api\/v1\/pairing\/(offers|joins|status|decision|cancel|signal)$/.exec(path)?.[1];
+      const route = /^\/api\/v1\/pairing\/(offers|joins|status|decision|cancel|signal|code)$/.exec(path)?.[1];
       if (route) {
         if (req.headers.origin && req.headers.origin !== (publicOrigin ?? `http://${req.headers.host}`)) {
           return json(403, { error: 'forbidden' });
@@ -157,6 +162,12 @@ export async function startServer(directory, {
         if (route === 'offers' && method === 'POST') return json(201, pairing.offer());
         if (route === 'joins' && method === 'POST') return json(201, pairing.join((await jsonBody(req))?.invitation));
         if (!bearer) return json(403, { error: 'forbidden' });
+        if (route === 'code' && method === 'POST') {
+          const body = (await jsonBody(req)) ?? {};
+          codes.validateEpoch(body.epoch);
+          if (codes.hasCode(body.lookup)) throw new CodeError('conflict');
+          return json(201, pairing.registerCode(bearer, body));
+        }
         if (route === 'status' && method === 'GET') return json(200, pairing.status(bearer));
         if (route === 'decision' && method === 'POST') return json(200, pairing.decide(bearer, (await jsonBody(req))?.state));
         if (route === 'cancel' && method === 'POST') return json(200, pairing.cancel(bearer));

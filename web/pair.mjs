@@ -1,5 +1,6 @@
 import { offerPair, joinPair, decidePair, cancelPair, pairStatus, invitationLink, pairSignals } from './src/pairing-client.mjs';
 import { connectLocal } from './src/local-channel.mjs';
+import { registerPairCode } from './src/short-code.mjs';
 import { qrImage } from './qr.mjs';
 
 function delay(signal) {
@@ -22,6 +23,10 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
   const dismiss = byId('pair-close');
   const box = byId('pair-qr-box');
   const linkGroup = byId('pair-link-group');
+  const codeGroup = byId('pair-code-group');
+  const codeInput = byId('pair-code');
+  const codeStatus = byId('pair-code-status');
+  const codeCopy = byId('pair-code-copy');
   const input = byId('pair-url');
   const copy = byId('pair-copy');
   const actions = byId('pair-actions');
@@ -37,6 +42,9 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
     if (current) current.qr = undefined;
     linkGroup.hidden = true;
     input.value = '';
+    codeGroup.hidden = true;
+    codeInput.value = '';
+    codeStatus.hidden = true;
   }
 
   function dispose() {
@@ -162,7 +170,10 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
       const link = invitationLink(new URL(location.pathname, location.origin), invitation, secret);
       input.value = link;
       linkGroup.hidden = false;
-      status.textContent = 'Открой приглашение на другом устройстве в этой сети.';
+      status.textContent = 'Подключи второе устройство в этой сети.';
+      codeStatus.textContent = 'Готовим короткий код…';
+      codeStatus.hidden = false;
+      void showCode(current);
       void watch(current);
       try {
         const blob = await qrImage(link);
@@ -181,15 +192,34 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
     }
   });
 
-  copy.addEventListener('click', async () => {
+  async function showCode(current) {
+    try {
+      const code = await registerPairCode(current.invitation, current.token);
+      if (attempt !== current || linkGroup.hidden) return;
+      codeInput.value = code.replace(/^(.{4})/, '$1 ');
+      codeGroup.hidden = false;
+      codeStatus.hidden = true;
+    } catch {
+      if (attempt === current && !linkGroup.hidden) {
+        codeStatus.textContent = 'Код недоступен. Используй QR или ссылку.';
+      }
+    }
+  }
+
+  async function copyInvitation(field, message) {
     const current = attempt;
     try {
-      await navigator.clipboard.writeText(input.value);
-      if (attempt === current) status.textContent = 'Приглашение скопировано. Открой его на другом устройстве.';
+      await navigator.clipboard.writeText(field.value);
+      if (attempt === current) status.textContent = message;
     } catch {
-      if (attempt === current) status.textContent = 'Выдели и скопируй ссылку вручную.';
+      if (attempt === current) {
+        field.select();
+        status.textContent = 'Скопируй выделенный текст.';
+      }
     }
-  });
+  }
+  copy.addEventListener('click', () => void copyInvitation(input, 'Приглашение скопировано. Открой его на другом устройстве.'));
+  codeCopy.addEventListener('click', () => void copyInvitation(codeInput, 'Короткий код скопирован.'));
 
   const decision = async accepted => {
     const current = attempt;
@@ -204,9 +234,7 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
   };
   decline.addEventListener('click', () => void decision(false));
   approve.addEventListener('click', () => void decision(true));
-  join.addEventListener('click', async () => {
-    const current = attempt;
-    if (!current || current.role !== 'recipient') return;
+  async function requestJoin(current) {
     join.disabled = true;
     try {
       const { recipient } = await joinPair(current.invitation.invitation);
@@ -219,6 +247,9 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
     } catch {
       error(current, 'Приглашение недоступно. Попроси создать новое.');
     }
+  }
+  join.addEventListener('click', () => {
+    if (attempt?.role === 'recipient') void requestJoin(attempt);
   });
 
   function dismissDialog() {
@@ -234,7 +265,8 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
   dialog.addEventListener('close', dismissDialog);
   dialog.addEventListener('keydown', event => {
     if (event.key !== 'Tab') return;
-    const fields = [dismiss, input, copy, decline, approve, join].filter(field => !field.disabled && !field.closest('[hidden]'));
+    const fields = [dismiss, codeInput, codeCopy, input, copy, decline, approve, join]
+      .filter(field => !field.disabled && !field.closest('[hidden]'));
     const index = fields.indexOf(document.activeElement);
     const step = event.shiftKey ? -1 : 1;
     event.preventDefault();
@@ -246,6 +278,11 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
       const current = begin('recipient', 'Подключись, если на первом устройстве открыто это приглашение.');
       current.invitation = invitation;
       showActions(current, 'join');
+    },
+    openCode(invitation) {
+      const current = begin('recipient', 'Отправляем запрос на первое устройство…');
+      current.invitation = invitation;
+      void requestJoin(current);
     },
     close() {
       dispose();

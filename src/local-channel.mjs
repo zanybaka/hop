@@ -8,10 +8,17 @@ const CHUNK_BYTES = FRAME_BYTES - 1;
 const HEADER = 1;
 const CHUNK = 2;
 const RECEIPT = 3;
+const REJECTED = 4;
 const HIGH_WATER = 256 * 1024;
 const LOW_WATER = HIGH_WATER / 2;
 const TRANSFER_TIMEOUT = 120_000;
 const POLL_MS = 150;
+
+export class PeerWriteDenied extends Error {
+  constructor() {
+    super('Peer denied the write');
+  }
+}
 
 function abortable(operation, signal) {
   return new Promise((resolve, reject) => {
@@ -77,6 +84,7 @@ export async function connectLocal({
   let incoming;
   let delivering = false;
   let awaitingReceipt = false;
+  let writeDenied = false;
 
   function close(reason = new Error('Local connection closed')) {
     if (lifecycle.signal.aborted) return;
@@ -99,7 +107,8 @@ export async function connectLocal({
     const buffer = event.data;
     if (!(buffer instanceof ArrayBuffer) || buffer.byteLength === 0) return close(new Error('Expected binary data'));
     const frame = new Uint8Array(buffer);
-    if (frame[0] === RECEIPT && frame.byteLength === 1 && awaitingReceipt) {
+    if ((frame[0] === RECEIPT || frame[0] === REJECTED) && frame.byteLength === 1 && awaitingReceipt) {
+      writeDenied = frame[0] === REJECTED;
       awaitingReceipt = false;
       channel.dispatchEvent(new Event('hopreceipt'));
       return;
@@ -126,9 +135,9 @@ export async function connectLocal({
     delivering = true;
     Promise.resolve().then(() => {
       if (!lifecycle.signal.aborted) return onMessage(blob);
-    }).then(() => {
+    }).then(accepted => {
       delivering = false;
-      if (!lifecycle.signal.aborted) channel.send(Uint8Array.of(RECEIPT));
+      if (!lifecycle.signal.aborted) channel.send(Uint8Array.of(accepted === false ? REJECTED : RECEIPT));
     }).catch(close);
   }
 
@@ -200,6 +209,7 @@ export async function connectLocal({
       header[0] = HEADER;
       new DataView(header.buffer).setUint32(1, blob.size);
       sending = true;
+      writeDenied = false;
       const timer = setTimeout(() => close(new Error('Local send timed out')), TRANSFER_TIMEOUT);
       try {
         channel.send(header);
@@ -222,6 +232,7 @@ export async function connectLocal({
         clearTimeout(timer);
         sending = false;
       }
+      if (writeDenied) throw new PeerWriteDenied();
     },
     close: () => close(),
   };

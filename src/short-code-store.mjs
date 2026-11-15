@@ -111,12 +111,17 @@ export function openCodeStore(directory, authorize, { now = Date.now, perSource 
       return { signed: hex(signed) };
     }
 
-    function register(id, owner, { epoch, lookup, wrapper } = {}) {
-      if (!Number.isSafeInteger(epoch) || !valid(HIT, lookup) || !valid(WRAPPER, wrapper)) throw new CodeError('invalid');
-      sweep();
-      const deadline = authorize(id, owner).absoluteDeadline;
+    function validateEpoch(epoch) {
+      if (!Number.isSafeInteger(epoch)) throw new CodeError('invalid');
       const current = epochAt();
       if ((epoch !== current && epoch !== current - 1) || !get(epoch)) throw new CodeError('missing');
+    }
+
+    function register(id, owner, { epoch, lookup, wrapper } = {}) {
+      if (!valid(HIT, lookup) || !valid(WRAPPER, wrapper)) throw new CodeError('invalid');
+      sweep();
+      const deadline = authorize(id, owner).absoluteDeadline;
+      validateEpoch(epoch);
       const previous = forRecord.get(id);
       if (previous?.lookup === lookup && previous.epoch === epoch) return;
       if (previous) throw new CodeError('registered');
@@ -131,7 +136,11 @@ export function openCodeStore(directory, authorize, { now = Date.now, perSource 
       return { wrapper: entry.wrapper };
     }
 
-    return { configs, evaluate, register, read, sweep, close() { db.close(); secrets.close(); } };
+    return {
+      configs, evaluate, register, read, sweep, validateEpoch,
+      hasCode(lookup) { return valid(HIT, lookup) && (find.get(lookup)?.deadline ?? 0) > now(); },
+      close() { db.close(); secrets.close(); },
+    };
   } catch (error) {
     secrets?.close();
     db.close();

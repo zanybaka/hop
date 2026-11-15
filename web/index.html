@@ -18,6 +18,7 @@
 <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
 <symbol id="i-back" viewBox="0 0 24 24"><path d="M20 12H5m6-6-6 6 6 6"/></symbol>
 <symbol id="i-link" viewBox="0 0 24 24"><path d="m9 15 6-6m-5-3 2-2a5 5 0 0 1 7 7l-2 2M7 11l-2 2a5 5 0 0 0 7 7l2-2"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
 <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/></symbol>
 <symbol id="i-qr" viewBox="0 0 24 24"><path d="M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h3v3h4v4h-7zm7 0v1"/></symbol>
     </defs></svg>
@@ -47,7 +48,7 @@
           </div>
           <div class="start-actions">
             <button type="button" id="create" class="button primary"><svg class="icon" aria-hidden="true"><use href="#i-link"/></svg>Передать по ссылке</button>
-            <button type="button" id="pair-start" class="button"><svg class="icon" aria-hidden="true"><use href="#i-qr"/></svg>Подключить по QR</button>
+            <button type="button" id="pair-start" class="button"><svg class="icon" aria-hidden="true"><use href="#i-qr"/></svg>QR и код</button>
             <form id="open-form">
               <label for="open-url">Открыть передачу</label>
               <div class="joined" data-focus-group>
@@ -121,7 +122,7 @@
         <button type="button" id="exchange-close" class="button" autofocus>Закрыть</button>
       </div>
       <div class="share-controls" id="exchange-controls">
-        <p>Полная ссылка и код дают право читать. Для редактирования отправь личную ссылку.</p>
+        <p id="exchange-description">Полная ссылка и код дают право читать. Для редактирования отправь личную ссылку.</p>
         <button type="button" id="exchange-invite" class="button primary">Создать ссылку редактора</button>
         <label for="writer-link" id="writer-label" hidden>Одноразовая ссылка для редактора</label>
         <input id="writer-link" class="address" readonly hidden>
@@ -153,9 +154,19 @@
         <div class="share-controls">
           <p id="pair-status" role="status" aria-live="polite"></p>
           <div id="pair-link-group" hidden>
+            <div id="pair-code-group" hidden>
+              <label for="pair-code">Введи этот код на втором устройстве</label>
+              <div class="pair-copy-row">
+                <input id="pair-code" class="address" type="text" readonly>
+                <button type="button" id="pair-code-copy" class="button" aria-label="Скопировать код" title="Скопировать код"><span>Скопировать код</span><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg></button>
+              </div>
+            </div>
+            <p id="pair-code-status" role="status" hidden></p>
             <label for="pair-url">Ссылка приглашения</label>
-            <input id="pair-url" class="address" type="text" readonly>
-            <button type="button" id="pair-copy" class="button">Скопировать ссылку</button>
+            <div class="pair-copy-row">
+              <input id="pair-url" class="address" type="text" readonly>
+              <button type="button" id="pair-copy" class="button" aria-label="Скопировать ссылку" title="Скопировать ссылку"><span>Скопировать ссылку</span><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg></button>
+            </div>
           </div>
           <div id="pair-actions" hidden>
             <button type="button" id="pair-decline" class="button">Отклонить</button>

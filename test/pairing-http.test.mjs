@@ -4,6 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../src/server.mjs';
+import { encryptTransfer, newTransfer } from '../src/envelope.mjs';
+import { deriveCode, newCode, PERIOD, unwrapAccess, wrapAccess } from '../src/short-code-crypto.mjs';
 
 test('explicit pair approval gates offer and answer at the HTTP boundary', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'hop-pairing-http-'));
@@ -72,6 +74,85 @@ test('mounts assets and API under one page path and uses the configured browser 
     });
     assert.equal((await offer(app.origin)).status, 403);
     assert.equal((await offer(publicOrigin)).status, 201);
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('short pair invitations share the same one-time join with QR and the code limiter', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'hop-pair-code-'));
+  let time = PERIOD;
+  const app = await startServer(directory, { now: () => time, codeLimits: { perSource: 4, total: 4 } });
+  try {
+    const api = app.origin + '/api/v1/';
+    const get = path => fetch(api + path);
+    const post = (path, value, owner) => fetch(api + path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(owner && { authorization: 'Bearer ' + owner }) },
+      body: JSON.stringify(value),
+    });
+    const offer = async () => (await post('pairing/offers', {})).json();
+    const [config] = await (await get('short-code/keys')).json();
+    const first = await offer();
+    const access = { id: first.invitation, secret: newTransfer().secret };
+    const code = newCode(config.epoch);
+    const evaluate = (epoch, blinded) => post('short-code/evaluate', { epoch, blinded });
+    const keysFor = input => deriveCode(input, config, async (epoch, blinded) => {
+      const result = await evaluate(epoch, blinded);
+      assert.equal(result.status, 200);
+      return (await result.json()).signed;
+    });
+    const wrong = code.slice(0, -1) + (code.at(-1) === '2' ? '3' : '2');
+    const keys = await keysFor(code);
+    const unknown = await keysFor(wrong);
+    assert.equal((await get('short-code/' + unknown.lookup)).status, 404);
+    const registration = {
+      epoch: config.epoch, lookup: keys.lookup, wrapper: await wrapAccess(keys, access),
+    };
+    assert.equal((await post('pairing/code', { ...registration, lookup: [] }, first.owner)).status, 400);
+    assert.equal((await post('pairing/code', { ...registration, lookup: [keys.lookup] }, first.owner)).status, 400);
+    assert.equal((await post('pairing/code', { ...registration, wrapper: [registration.wrapper] }, first.owner)).status, 400);
+    assert.equal((await post('pairing/code', registration, newTransfer().secret)).status, 404);
+    assert.equal((await post('pairing/code', registration, first.owner)).status, 201);
+    const second = await offer();
+    assert.equal((await post('pairing/code', registration, second.owner)).status, 409);
+    const publication = newTransfer();
+    const publisher = newTransfer().secret;
+    const envelope = await encryptTransfer(publication, { text: 'test publication', files: [] });
+    const res = await post('reservations', {
+      id: publication.id, version: 0, bytes: envelope.size, hasFiles: false,
+    }, publisher);
+    assert.equal(res.status, 201);
+    const { token } = await res.json();
+    const stored = await fetch(api + 'uploads/' + token, {
+      method: 'PUT', headers: { 'content-length': envelope.size }, body: envelope,
+    });
+    assert.equal(stored.status, 201);
+    assert.equal((await post('short-code/' + publication.id, registration, publisher)).status, 409);
+    const wrapped = await (await get('short-code/' + keys.lookup)).json();
+    assert.equal(wrapped.kind, 'pair');
+    const fromCode = await unwrapAccess(await keysFor(code), wrapped.wrapper);
+    assert.deepEqual(fromCode, access);
+    const results = await Promise.all([
+      post('pairing/joins', { invitation: fromCode.id }),
+      post('pairing/joins', { invitation: first.invitation }),
+    ]);
+    assert.deepEqual(results.map(res => res.status).sort(), [201, 404]);
+    assert.equal((await get('short-code/' + keys.lookup)).status, 404);
+    assert.equal((await post('pairing/decision', { state: 'declined' }, first.owner)).status, 200);
+    assert.equal((await post('short-code/' + publication.id, registration, publisher)).status, 201);
+    assert.equal((await post('pairing/code', registration, second.owner)).status, 409);
+    const secondKeys = await keysFor(newCode(config.epoch));
+    const secondRegistration = {
+      epoch: config.epoch, lookup: secondKeys.lookup,
+      wrapper: await wrapAccess(secondKeys, { id: second.invitation, secret: newTransfer().secret }),
+    };
+    assert.equal((await post('pairing/code', secondRegistration, second.owner)).status, 201);
+    assert.equal((await evaluate(config.epoch, '0'.repeat(767) + '2')).status, 429);
+    time += 300_000;
+    assert.equal((await get('short-code/' + secondKeys.lookup)).status, 404);
+    assert.equal((await post('pairing/joins', { invitation: second.invitation })).status, 404);
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });

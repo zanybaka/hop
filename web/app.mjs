@@ -1,13 +1,14 @@
 import { newTransfer, parseTransferLink, transferLink } from './src/envelope.mjs';
 import { compareRevision, openRevision, sealRevision } from './src/direct-revision.mjs';
 import { createPublication, publishPublication, readPublication, saveCheckpoint, createWriterLink,
-  claimWriter, exchangeSettings, readWriterLink, prepareContinuation, enableContinuation, saveContinuation,
+  claimWriter, exchangeSettings, readWriterLink, prepareContinuation, saveContinuation,
   enrollRotationKey, rotatePublication } from './src/publication.mjs';
 import { createRotationKeyPair, openRotationAccess, sealRotationAccess } from './src/rotation-client.mjs';
 import { parseInvitationLink } from './src/pairing-client.mjs';
 import { normalizeCode } from './src/short-code-crypto.mjs';
-import { registerShortCode, resolveShortCode, ShortCodeError } from './src/short-code.mjs';
+import { registerShortCode, resolveOpenCode, ShortCodeError } from './src/short-code.mjs';
 import { createEditorState, editDraft, prepareSend, receiveVersion } from './src/editor-state.mjs';
+import { PeerWriteDenied } from './src/local-channel.mjs';
 import { qrImage } from './qr.mjs';
 import { setupPairing } from './pair.mjs';
 
@@ -30,7 +31,7 @@ let qrGeneration = 0;
 let qrUrl;
 let peer;
 const exchangeDialog = controls['exchange-dialog'];
-const writable = current => Boolean(current?.owner || current?.writer && current.canWrite || current?.direct);
+const writable = current => Boolean(current?.pairOwner || current?.owner || current?.writer && current.canWrite);
 const writerKey = id => 'hop.writer.' + id;
 const groupFor = current => current.stableId ?? current.access.id;
 const groupKey = locator => 'hop.group.' + locator;
@@ -195,7 +196,7 @@ function showWorkspace(current, content) {
   controls.share.hidden = Boolean(current.revoked || (current.direct && !current.continuation));
   const editable = writable(current);
   controls['read-only'].hidden = editable || Boolean(current.revoked);
-  controls['exchange-open'].hidden = !current.owner;
+  controls['exchange-open'].hidden = !(current.owner || current.pairOwner);
   conflictVersion = undefined;
   controls.send.textContent = 'Отправить';
   editor.hidden = !editable;
@@ -227,7 +228,7 @@ function showWorkspace(current, content) {
 }
 
 function saveDraft() {
-  if (!(session?.owner || session?.writer) || !writable(session)) return;
+  if (!writable(session)) return;
   if (revision === savedRevision) drafts.delete(session.access.id);
   else drafts.set(session.access.id, { text: editor.value, files: Array.from(files) });
 }
@@ -303,7 +304,17 @@ async function open(access, offeredWriter, shortCode, offeredGroup) {
   lock(true);
   report('Открываем передачу…');
   try {
-    if (shortCode) access = await resolveShortCode(shortCode);
+    if (shortCode) {
+      const resolved = await resolveOpenCode(shortCode);
+      if (request !== generation) return;
+      if (resolved.invitation) {
+        lock(false);
+        showHome();
+        pairing.openCode(resolved.invitation);
+        return;
+      }
+      access = resolved.access;
+    }
     const stableId = offeredGroup ?? recall(groupKey(access.id)) ?? access.id;
     const owner = recall(ownerKey(stableId));
     let writer = owner ? null : recall(writerKey(stableId));
@@ -597,9 +608,11 @@ const pairing = setupPairing({
   onConnected({ channel, role, access, continuation: recovery }) {
     const empty = { text: '', files: [] };
     const { access: continuation, writer } = recovery;
-    const current = { channel, role, access, continuation, writer, state: createEditorState(0, empty), latest: null, order: { clock: 0, role } };
+    const current = { channel, role, access, continuation, writer, state: createEditorState(0, empty),
+      latest: null, order: { clock: 0, role }, checkpointVersion: 1 };
     peer = current;
-    showWorkspace({ direct: true, access, continuation }, empty);
+    showWorkspace({ direct: true, pairOwner: role === 'owner', access, continuation,
+      writer: role === 'recipient' ? writer : null, canWrite: false }, empty);
     history.replaceState(null, '', transferLink(originPage, continuation));
     current.preparation = role === 'owner'
       ? prepareContinuation(continuation, writer, owner => {
@@ -609,6 +622,7 @@ const pairing = setupPairing({
       : null;
     if (role === 'recipient') remember(writerKey(continuation.id), writer);
     report('Устройства соединены.');
+    void refreshExchange();
   },
   async onEnvelope(blob, { access }) {
     const current = peer;
@@ -616,6 +630,16 @@ const pairing = setupPairing({
     const other = current.role === 'owner' ? 'recipient' : 'owner';
     const received = await openRevision(access, blob, other);
     if (peer !== current) throw Error('Pair is closed');
+    if (other === 'recipient') {
+      if (current.changingMode) return false;
+      const modeChange = current.modeChange;
+      let settings;
+      try { settings = await pairExchangeSettings(current, current.writer); }
+      catch { return false; }
+      if (peer !== current || current.changingMode || current.modeChange !== modeChange || !settings.canWrite ||
+          settings.locator !== current.continuation.id) return false;
+      received.checkpointVersion = settings.version;
+    }
     if (compareRevision(received.revision, current.order) <= 0) return;
     if (current.pending && compareRevision(received.revision, current.pending.order) < 0) {
       current.pending.fallback = received;
@@ -632,14 +656,20 @@ const pairing = setupPairing({
   },
 });
 
-function applyIncoming(current, { revision: order, content }) {
+function applyIncoming(current, { revision: order, content, checkpointVersion }) {
   const supersedesConcurrentSend = order.clock === current.order.clock && current.order.role === current.role;
   current.order = order;
   current.latest = content;
+  current.checkpointVersion = checkpointVersion ?? current.checkpointVersion;
   if (supersedesConcurrentSend && revision === savedRevision) ++revision;
   const state = revision === savedRevision ? current.state : editDraft(current.state, compose());
   current.state = receiveVersion(state, state.version + 1, content);
-  if (!current.state.dirty) {
+  if (!writable(session)) {
+    controls['read-text'].textContent = content.text;
+    controls['copy-text'].disabled = !content.text;
+    readFiles = Array.from(content.files);
+    showFiles(false);
+  } else if (!current.state.dirty) {
     editor.value = content.text;
     controls['copy-text'].disabled = !editor.value;
     files = Array.from(content.files);
@@ -650,33 +680,54 @@ function applyIncoming(current, { revision: order, content }) {
   }
 }
 
+async function pairExchangeSettings(current, credential) {
+  await current.preparation;
+  return exchangeSettings(current.continuation.id, credential ?? current.owner ?? current.writer);
+}
+
+function syncPairMode(current, settings) {
+  if (peer !== current || !session?.direct) return;
+  const canWrite = settings.canWrite && settings.locator === current.continuation.id;
+  if (current.role === 'recipient' && canWrite !== writable(session)) {
+    const content = current.latest ?? { text: '', files: [] };
+    showWorkspace({ ...session, canWrite }, content);
+    report(canWrite ? 'Владелец разрешил редактирование.' : 'Владелец включил режим чтения.');
+  }
+}
+
+async function storePairSnapshot(current, content, version) {
+  const stored = await publishPublication({
+    access: current.continuation, owner: current.owner, version,
+  }, content);
+  current.checkpointVersion = stored.version;
+  current.checkpointContent = content;
+  return stored;
+}
+
 async function saveAfterDisconnect(current) {
-  if (busy || peer !== current || current.channel || !current.latest || current.checkpointSaved) return;
+  if (busy || peer !== current || current.channel || current.checkpointSaved) return;
   lock(true);
   try {
     const access = current.continuation;
-    const prepared = await current.preparation;
-    if (!prepared && current.owner) await enableContinuation(access, current.owner, current.writer);
-    const credential = current.owner ?? current.writer;
     let settings;
-    try { settings = await exchangeSettings(access.id, credential); }
+    try { settings = await pairExchangeSettings(current); }
     catch (error) { if (error.status !== 404 && error.status !== 403) throw error; }
-    const canContinue = Boolean(settings?.canWrite);
-    const stored = canContinue
-      ? settings.version === 1
-        ? await saveContinuation({ access, owner: credential, version: 1 }, current.latest)
-        : await readPublication(access, { confirm: false })
-      : await saveCheckpoint(access, current.latest);
+    if (!settings && !current.latest) return;
+    const stored = !settings ? await saveCheckpoint(access, current.latest)
+      : settings.canWrite && current.latest && settings.version === current.checkpointVersion && current.latest !== current.checkpointContent
+        ? await saveContinuation({ access, owner: current.owner ?? current.writer, version: settings.version }, current.latest)
+        : await readPublication(access, { confirm: false });
     if (peer !== current) return;
-    if (canContinue) {
-      const dirty = revision !== savedRevision;
-      const draft = compose();
+    if (settings) {
+      saveDraft();
+      const draft = drafts.get(current.access.id);
       const content = stored.content ?? current.latest;
-      if (dirty) drafts.set(access.id, draft);
+      if (draft) drafts.set(access.id, draft);
       peer = undefined;
       pairing.close();
-      showWorkspace({ access, ...stored, owner: current.owner, writer: current.owner ? null : current.writer, canWrite: true }, content);
-      report(dirty ? 'Передача сохранена по ссылке. Черновик ещё не отправлен.' : 'Передача сохранена по ссылке.');
+      showWorkspace({ access, ...stored, owner: current.owner, writer: current.owner ? null : current.writer,
+        canWrite: settings.canWrite }, content);
+      report(draft ? 'Передача сохранена по ссылке. Черновик ещё не отправлен.' : 'Передача сохранена по ссылке.');
       return;
     }
     current.checkpointSaved = true;
@@ -746,18 +797,42 @@ async function sendToPeer() {
       report('Пришла новая версия. Проверь черновик перед отправкой.');
       return;
     }
+    let settings;
+    try { settings = await pairExchangeSettings(current); }
+    catch (error) { if (current.role !== 'owner') throw error; }
+    if (peer !== current || !current.channel) throw Error('Pair is closed');
+    if (settings) {
+      syncPairMode(current, settings);
+      if (!writable(session)) return;
+    }
+    if (current.state.version !== version) {
+      report('Пришла новая версия. Проверь черновик перед отправкой.');
+      return;
+    }
     await current.channel.send(blob);
     if (peer !== current) return;
     if (current.state.version === version) {
       current.order = order;
       current.latest = content;
+      if (settings) current.checkpointVersion = settings.version;
       current.state = createEditorState(version, content);
       savedRevision = sentRevision;
       current.draftRevision = undefined;
       report(revision === savedRevision ? 'Отправлено.' : 'Отправлено. Новые изменения ещё не отправлены.');
+      if (settings?.mode === 'read') {
+        try { await storePairSnapshot(current, content, settings.version); }
+        catch {
+          if (peer === current) report('Доставлено на устройство. Пока не удалось сохранить по ссылке.', true);
+        }
+      }
     }
   } catch (error) {
     if (peer === current) {
+      if (error instanceof PeerWriteDenied) {
+        void pairExchangeSettings(current).then(settings => syncPairMode(current, settings)).catch(() => {});
+        report('Отправка отклонена. Черновик сохранён.', true);
+        return;
+      }
       const fallback = current.pending?.fallback;
       if (fallback && compareRevision(fallback.revision, current.order) > 0) applyIncoming(current, fallback);
       report(current.channel ? explain(error) : 'Соединение прервано. Можно сохранить черновик по ссылке.', true);
@@ -779,9 +854,19 @@ function openPair(invitation) {
 
 async function refreshExchange() {
   const current = session;
-  if (busy || refreshBusy || current?.direct || !(current?.owner || current?.writer)) return;
+  if (busy || refreshBusy || !(current?.owner || current?.writer || current?.pairOwner)) return;
   refreshBusy = true;
   try {
+    if (current.direct) {
+      const connection = peer;
+      if (!connection?.channel || connection.changingMode) return;
+      const modeChange = connection.modeChange;
+      const settings = await pairExchangeSettings(connection);
+      if (busy || session !== current || connection.changingMode || connection.modeChange !== modeChange) return;
+      syncPairMode(connection, settings);
+      renderExchange(settings);
+      return;
+    }
     let settings;
     const stableId = groupFor(current);
     try { settings = await exchangeSettings(stableId, current.owner ?? current.writer); }
@@ -915,10 +1000,12 @@ function renderExchange(settings) {
   if (!exchangeDialog.open) return;
   controls['exchange-mode'].textContent = settings.mode === 'exchange' ? 'Оставить только чтение' : 'Включить обмен';
   controls['exchange-mode'].dataset.next = settings.mode === 'exchange' ? 'read' : 'exchange';
+  controls['exchange-invite'].hidden = Boolean(session?.direct);
   const members = settings.members ?? [];
   if (!revocation) controls['exchange-status'].textContent = 'Участников: ' + (members.length + 1) + ' из 8. На связи: ' +
     (members.filter(member => member.present).length + 1) + '.';
   const list = controls['exchange-members'];
+  list.hidden = Boolean(session?.direct);
   const fingerprint = JSON.stringify(members);
   if (list.dataset.members === fingerprint) return;
   list.dataset.members = fingerprint;
@@ -948,13 +1035,22 @@ function renderExchange(settings) {
 }
 
 controls['exchange-open'].addEventListener('click', async () => {
-  if (!session?.owner || session.direct) return;
+  const current = session;
+  if (!(current?.owner || current?.pairOwner)) return;
   controls['exchange-mode'].disabled = true;
+  controls['exchange-description'].textContent = current.direct
+    ? 'Выбери, может ли подключённое устройство отправлять текст и файлы.'
+    : 'Полная ссылка и код дают право читать. Для редактирования отправь личную ссылку.';
+  controls['exchange-invite'].hidden = Boolean(current.direct);
+  controls['exchange-members'].hidden = Boolean(current.direct);
   delete controls['exchange-mode'].dataset.next;
   controls['exchange-status'].textContent = 'Загружаем…';
   exchangeDialog.showModal();
   controls['exchange-close'].focus();
-  try { renderExchange(await exchangeSettings(groupFor(session), session.owner)); }
+  try {
+    const settings = current.direct ? await pairExchangeSettings(peer) : await exchangeSettings(groupFor(current), current.owner);
+    if (session === current) renderExchange(settings);
+  }
   catch (error) { controls['exchange-status'].textContent = explain(error); }
   finally { controls['exchange-mode'].disabled = false; }
 });
@@ -980,11 +1076,38 @@ exchangeDialog.addEventListener('keydown', event => {
 });
 controls['exchange-mode'].addEventListener('click', async () => {
   const button = controls['exchange-mode'];
-  if (!button.dataset.next || !session?.owner || busy) return;
+  const current = session;
+  if (!button.dataset.next || !(current?.owner || current?.pairOwner) || busy) return;
+  const connection = current.direct ? peer : null;
+  const mode = button.dataset.next;
   button.disabled = true;
-  try { renderExchange(await exchangeSettings(groupFor(session), session.owner, 'mode', { mode: button.dataset.next })); }
+  try {
+    if (connection) {
+      connection.changingMode = true;
+      connection.modeChange = (connection.modeChange ?? 0) + 1;
+      lock(true);
+      const settings = await pairExchangeSettings(connection);
+      if (mode === 'read' && connection.latest && connection.latest !== connection.checkpointContent) {
+        if (settings.version !== connection.checkpointVersion) throw Object.assign(Error('Publication changed'), { status: 409 });
+        await storePairSnapshot(connection, connection.latest, settings.version);
+      }
+      const updated = await exchangeSettings(connection.continuation.id, connection.owner, 'mode', { mode });
+      syncPairMode(connection, updated);
+      renderExchange(updated);
+    } else {
+      renderExchange(await exchangeSettings(groupFor(current), current.owner, 'mode', { mode }));
+    }
+  }
   catch (error) { controls['exchange-status'].textContent = explain(error); }
-  finally { button.disabled = false; if (exchangeDialog.open) button.focus(); }
+  finally {
+    if (connection) {
+      connection.changingMode = false;
+      lock(false);
+      void saveAfterDisconnect(connection);
+    }
+    button.disabled = false;
+    if (exchangeDialog.open) button.focus();
+  }
 });
 controls['exchange-invite'].addEventListener('click', async () => {
   const current = session;
