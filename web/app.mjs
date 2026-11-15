@@ -14,7 +14,7 @@ import { setupPairing } from './pair.mjs';
 const controls = Object.fromEntries(Array.from(document.querySelectorAll('[id]'), node => [node.id, node]));
 const editor = controls.draft;
 const status = controls.status;
-const modal = controls['share-dialog'];
+const sharePanel = controls['share-dialog'];
 const originPage = new URL(location.pathname, location.origin);
 const expiryFormat = new Intl.DateTimeFormat('ru', { dateStyle: 'medium', timeStyle: 'short' });
 const drafts = new Map();
@@ -140,6 +140,7 @@ function clearDownloads() {
 function showFiles(editable) {
   clearDownloads();
   const selected = editable ? files : readFiles;
+  controls['file-count'].textContent = selected.length;
   const list = editable ? controls['draft-files'] : controls['received-files'];
   const other = editable ? controls['received-files'] : controls['draft-files'];
   other.replaceChildren();
@@ -185,24 +186,29 @@ function showFiles(editable) {
 
 function showWorkspace(current, content) {
   saveDraft();
+  const sameTransfer = session?.access.id === current.access.id;
   session = current;
   controls.home.hidden = true;
   controls.workspace.hidden = false;
+  controls['new-connection'].hidden = false;
+  if (!sameTransfer) selectView('text');
   controls.share.hidden = Boolean(current.revoked || (current.direct && !current.continuation));
   const editable = writable(current);
+  controls['read-only'].hidden = editable || Boolean(current.revoked);
   controls['exchange-open'].hidden = !current.owner;
   conflictVersion = undefined;
   controls.send.textContent = 'Отправить';
   editor.hidden = !editable;
   controls['read-text'].hidden = editable;
   controls.send.hidden = !editable;
-  controls['copy-text'].hidden = editable && !current.direct;
-  controls['copy-text'].disabled = !current.direct && !content.text;
+  controls['copy-text'].hidden = false;
+  controls['copy-text'].disabled = !content.text;
   controls['attach-control'].hidden = !editable;
   if (editable) {
     const unsent = drafts.get(current.access.id);
     const draft = unsent ?? content;
     editor.value = draft.text;
+    controls['copy-text'].disabled = !draft.text;
     files = Array.from(draft.files);
     savedRevision = revision;
     if (unsent) ++revision;
@@ -215,7 +221,7 @@ function showWorkspace(current, content) {
   }
   showFiles(editable);
   showExpiry();
-  if (editable) editor.focus();
+  if (editable && controls.workspace.dataset.view !== 'files' && sharePanel.hidden) editor.focus();
   else if (current.revoked) (content.text ? controls['copy-text'] : controls['home-button']).focus();
   else controls.share.focus();
 }
@@ -230,7 +236,7 @@ function showHome({ preserveHash = false } = {}) {
   saveDraft();
   peer = undefined;
   pairing.close();
-  if (modal.open) modal.close();
+  if (!sharePanel.hidden) closeShare(false);
   if (exchangeDialog.open) exchangeDialog.close();
   clearDownloads();
   session = undefined;
@@ -241,6 +247,7 @@ function showHome({ preserveHash = false } = {}) {
   controls.attachments.value = '';
   controls['open-url'].value = '';
   controls.workspace.hidden = true;
+  controls['new-connection'].hidden = true;
   controls.share.hidden = true;
   controls.home.hidden = false;
   if (location.hash && !preserveHash) history.replaceState(null, '', originPage.href);
@@ -249,6 +256,21 @@ function showHome({ preserveHash = false } = {}) {
 }
 
 controls['home-button'].addEventListener('click', showHome);
+controls['new-connection'].addEventListener('click', showHome);
+
+function selectView(view) {
+  controls.workspace.dataset.view = view;
+  for (const name of ['text', 'files']) controls['view-' + name].setAttribute('aria-pressed', String(view === name));
+}
+
+controls['view-text'].addEventListener('click', () => selectView('text'));
+controls['view-files'].addEventListener('click', () => selectView('files'));
+const deviceType = /iPhone|iPad|Android/i.test(navigator.userAgent) ? 'Телефон или планшет'
+  : /Windows/i.test(navigator.userAgent) ? 'Компьютер Windows'
+  : /Macintosh/i.test(navigator.userAgent) ? 'Mac' : '';
+if (deviceType) controls['device-name'].textContent = deviceType;
+if (/iPhone|iPad|Android/i.test(navigator.userAgent)) controls['device-icon'].setAttribute('href', '#i-phone');
+
 
 controls.create.addEventListener('click', async () => {
   if (busy) return;
@@ -276,7 +298,7 @@ async function open(access, offeredWriter, shortCode, offeredGroup) {
   peer = undefined;
   pairing.close();
   const request = ++generation;
-  if (modal.open) modal.close();
+  if (!sharePanel.hidden) closeShare(false);
   if (exchangeDialog.open) exchangeDialog.close();
   lock(true);
   report('Открываем передачу…');
@@ -411,7 +433,7 @@ controls.attachments.addEventListener('change', event => {
   report();
 });
 
-editor.addEventListener('input', () => { ++revision; });
+editor.addEventListener('input', () => { ++revision; controls['copy-text'].disabled = !editor.value; });
 
 controls.send.addEventListener('click', async () => {
   if (busy || !writable(session)) return;
@@ -457,7 +479,7 @@ async function copy(text, message, output = report) {
 }
 
 controls['copy-text'].addEventListener('click', () => {
-  void copy(session?.direct ? editor.value : controls['read-text'].textContent, 'Текст скопирован.');
+  void copy(writable(session) ? editor.value : controls['read-text'].textContent, 'Текст скопирован.');
 });
 controls['copy-link'].addEventListener('click', () => {
   void copy(controls['share-url'].value, 'Ссылка скопирована.', text => { controls['qr-status'].textContent = text; });
@@ -472,16 +494,16 @@ function savedShortCode(id) {
 
 function showShortCode(code) {
   controls['enable-short-code'].hidden = Boolean(code);
-  controls['short-code-label'].hidden = controls['short-code'].hidden = !code;
+  controls['copy-short-code'].hidden = controls['short-code'].hidden = !code;
   controls['short-code'].value = code ? code.slice(0, 4) + ' ' + code.slice(4) : '';
 }
 
 controls['enable-short-code'].addEventListener('click', async () => {
   const current = session;
-  if (!modal.open || !current?.owner || current.direct || current.creatingCode) return;
+  if (sharePanel.hidden || !current?.owner || current.direct || current.creatingCode) return;
   const button = controls['enable-short-code'];
   const key = shortCodeKey(current.access.id);
-  const stillSharing = () => modal.open && session?.access.id === current.access.id;
+  const stillSharing = () => !sharePanel.hidden && session?.access.id === current.access.id;
   const save = value => {
     current.shortCode = value;
     if (session?.access.id === current.access.id) session.shortCode = value;
@@ -512,7 +534,8 @@ controls['enable-short-code'].addEventListener('click', async () => {
 });
 
 controls.share.addEventListener('click', async () => {
-  if (!session || modal.open) return;
+  if (!session) return;
+  if (!sharePanel.hidden) return closeShare();
   const link = transferLink(originPage, session.continuation ?? session.access);
   const request = ++qrGeneration;
   controls['short-code-controls'].hidden = !session.owner || Boolean(session.direct);
@@ -524,11 +547,15 @@ controls.share.addEventListener('click', async () => {
   controls['qr-status'].textContent = session.direct && !peer?.checkpointSaved
     ? 'По этой ссылке данные откроются после сохранения передачи.' : '';
   controls['qr-box'].replaceChildren();
-  modal.showModal();
+  controls['share-writer'].hidden = !session.owner || Boolean(session.direct);
+  controls['share-instruction'].textContent = controls['short-code-controls'].hidden
+    ? 'Сканируй QR камерой или скопируй ссылку.' : 'Сканируй QR или введи код на главной Hop.';
+  sharePanel.hidden = false;
+  controls.share.setAttribute('aria-expanded', 'true');
   controls['close-share'].focus();
   try {
     const image = await qrImage(link);
-    if (!modal.open || request !== qrGeneration) return;
+    if (sharePanel.hidden || request !== qrGeneration) return;
     if (qrUrl) URL.revokeObjectURL(qrUrl);
     qrUrl = URL.createObjectURL(image);
     const qr = document.createElement('img');
@@ -538,29 +565,33 @@ controls.share.addEventListener('click', async () => {
     qr.src = qrUrl;
     controls['qr-box'].replaceChildren(qr);
   } catch {
-    if (modal.open && request === qrGeneration) controls['qr-status'].textContent = 'QR недоступен. Скопируй ссылку.';
+    if (!sharePanel.hidden && request === qrGeneration) controls['qr-status'].textContent = 'QR недоступен. Скопируй ссылку.';
   }
 });
 
-controls['close-share'].addEventListener('click', () => modal.close());
-modal.addEventListener('keydown', event => {
-  if (event.key !== 'Tab') return;
-  const fields = ['close-share', 'share-url', 'copy-link', 'enable-short-code', 'short-code']
-    .map(id => controls[id]).filter(field => !field.disabled && field.getClientRects().length);
-  const index = fields.indexOf(document.activeElement);
-  const step = event.shiftKey ? -1 : 1;
-  event.preventDefault();
-  fields[(index + step + fields.length) % fields.length].focus();
+controls['close-share'].addEventListener('click', () => closeShare());
+controls['copy-short-code'].addEventListener('click', () => {
+  void copy(controls['short-code'].value, 'Код скопирован.', text => { controls['short-code-status'].textContent = text; });
 });
-modal.addEventListener('close', () => {
+controls['share-writer'].addEventListener('click', () => {
+  closeShare(false);
+  controls['exchange-open'].click();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !sharePanel.hidden && !exchangeDialog.open) closeShare();
+});
+
+function closeShare(restore = true) {
   ++qrGeneration;
+  sharePanel.hidden = true;
+  controls.share.setAttribute('aria-expanded', 'false');
   if (qrUrl) URL.revokeObjectURL(qrUrl);
   qrUrl = undefined;
   controls['qr-box'].replaceChildren();
   controls['share-url'].value = '';
   controls['short-code'].value = '';
-  if (!controls.share.hidden) controls.share.focus();
-});
+  if (restore && !controls.share.hidden) controls.share.focus();
+}
 
 const pairing = setupPairing({
   onConnected({ channel, role, access, continuation: recovery }) {
@@ -610,6 +641,7 @@ function applyIncoming(current, { revision: order, content }) {
   current.state = receiveVersion(state, state.version + 1, content);
   if (!current.state.dirty) {
     editor.value = content.text;
+    controls['copy-text'].disabled = !editor.value;
     files = Array.from(content.files);
     showFiles(true);
     report('Получено.');
@@ -792,7 +824,7 @@ async function refreshExchange() {
       remember(groupKey(access.id), stableId);
       history.replaceState(null, '', transferLink(originPage, access));
       if (revision !== savedRevision) drafts.set(access.id, compose());
-      if (modal.open) modal.close();
+      if (!sharePanel.hidden) closeShare(false);
       clearWriterLink();
     }
     showWorkspace({ ...current, ...incoming, access, stableId, canWrite: settings.canWrite,
@@ -819,6 +851,8 @@ function closeRevocation() {
 }
 
 function clearWriterLink() {
+  controls['copy-writer'].hidden = true;
+  controls['writer-status'].textContent = '';
   controls['writer-link'].value = '';
   controls['writer-link'].hidden = controls['writer-label'].hidden = true;
 }
@@ -866,7 +900,7 @@ controls['revoke-apply'].addEventListener('click', async () => {
       renderExchange({ ...settings, members: remaining });
       controls['exchange-status'].textContent = 'Участник отключён. Ссылка обновлена.';
     }
-    report('Участник отключён. Открой «Ссылка и QR», чтобы поделиться новой ссылкой.');
+    report('Участник отключён. Новая ссылка в меню «Подключить».');
   } catch (error) {
     if (revocation && exchangeDialog.open) revokeStatus(explain(error));
     else report(explain(error), true);
@@ -937,7 +971,7 @@ exchangeDialog.addEventListener('cancel', event => {
 });
 exchangeDialog.addEventListener('keydown', event => {
   if (event.key !== 'Tab') return;
-  const fields = [...['exchange-close', 'exchange-mode', 'exchange-invite', 'writer-link'].map(id => controls[id]),
+  const fields = [...['exchange-close', 'exchange-invite', 'writer-link', 'copy-writer', 'exchange-mode'].map(id => controls[id]),
     ...controls['exchange-members'].querySelectorAll('button'), controls['revoke-cancel'], controls['revoke-apply']]
     .filter(field => field.getClientRects().length && !field.disabled);
   const index = fields.indexOf(document.activeElement);
@@ -958,13 +992,23 @@ controls['exchange-invite'].addEventListener('click', async () => {
   const button = controls['exchange-invite'];
   button.disabled = true;
   try {
-    const link = await createWriterLink(originPage, current.access, current.owner, groupFor(current));
+    const group = groupFor(current);
+    const link = await createWriterLink(originPage, current.access, current.owner, group);
+    renderExchange(await exchangeSettings(group, current.owner, 'mode', { mode: 'exchange' }));
     if (!exchangeDialog.open || session !== current) return;
     controls['writer-link'].value = link;
     controls['writer-link'].hidden = controls['writer-label'].hidden = false;
-    await copy(link, 'Ссылка участника скопирована.', text => { controls['exchange-status'].textContent = text; });
+    controls['copy-writer'].hidden = false;
+    controls['writer-status'].textContent = '';
+    controls['copy-writer'].focus();
   } catch (error) { controls['exchange-status'].textContent = explain(error); }
-  finally { button.disabled = false; if (exchangeDialog.open) button.focus(); }
+  finally {
+    button.disabled = false;
+    if (exchangeDialog.open && controls['copy-writer'].hidden) button.focus();
+  }
+});
+controls['copy-writer'].addEventListener('click', () => {
+  void copy(controls['writer-link'].value, 'Приглашение скопировано.', text => { controls['writer-status'].textContent = text; });
 });
 setInterval(refreshExchange, 1500);
 

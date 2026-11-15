@@ -12,11 +12,21 @@
     <script type="module" src="./app.mjs"></script>
   </head>
   <body>
+    <svg hidden aria-hidden="true"><defs>
+<symbol id="i-laptop" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="13" rx="2"/><path d="M2 20h20l-2-4H4z"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 18h4"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M20 12H5m6-6-6 6 6 6"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="m9 15 6-6m-5-3 2-2a5 5 0 0 1 7 7l-2 2M7 11l-2 2a5 5 0 0 0 7 7l2-2"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/></symbol>
+<symbol id="i-qr" viewBox="0 0 24 24"><path d="M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h3v3h4v4h-7zm7 0v1"/></symbol>
+    </defs></svg>
     <div class="application">
       <header class="head">
         <button type="button" id="home-button" class="brand button" aria-label="На главную">hop<span aria-hidden="true">.</span></button>
+        <button type="button" id="new-connection" class="button quiet" aria-label="Новое соединение" hidden><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg><span>Устройства</span></button>
         <div class="head-actions">
-          <button class="button" type="button" id="share" hidden>Ссылка и QR</button>
+          <button class="button" type="button" id="share" aria-expanded="false" aria-controls="share-dialog" hidden><svg class="icon" aria-hidden="true"><use href="#i-qr"/></svg>Подключить</button>
           <button class="button" type="button" id="theme" aria-pressed="false" aria-label="Тёмная тема">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M20 15a8 8 0 0 1-11-11 8.1 8.1 0 1 0 11 11Z"/></svg>
           </button>
@@ -24,17 +34,25 @@
       </header>
       <main id="main">
         <section id="home" class="home">
-          <div class="start">
-            <h1>Передача между устройствами</h1>
-            <div class="start-actions">
-              <button type="button" id="create" class="button primary">Передать по ссылке</button>
-              <button type="button" id="pair-start" class="button">Соединить по QR</button>
+          <div class="home-heading">
+            <h1>Подключить устройство</h1>
+            <p>Открой Hop на втором устройстве или покажи ему QR.</p>
+          </div>
+          <div class="radar-stage">
+            <div class="radar-rings" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <div class="device-origin">
+              <svg class="icon" aria-hidden="true"><use id="device-icon" href="#i-laptop"/></svg>
+              <span id="device-name">Это устройство</span>
             </div>
+          </div>
+          <div class="start-actions">
+            <button type="button" id="create" class="button primary"><svg class="icon" aria-hidden="true"><use href="#i-link"/></svg>Передать по ссылке</button>
+            <button type="button" id="pair-start" class="button"><svg class="icon" aria-hidden="true"><use href="#i-qr"/></svg>Подключить по QR</button>
             <form id="open-form">
               <label for="open-url">Открыть передачу</label>
               <div class="joined" data-focus-group>
-                <input id="open-url" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Код или ссылка">
-                <button class="button" type="submit">Открыть</button>
+                <input id="open-url" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Короткий код или ссылка">
+                <button class="button" type="submit" aria-label="Открыть передачу"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
               </div>
             </form>
           </div>
@@ -42,8 +60,13 @@
         <section id="workspace" class="workspace" hidden>
           <div class="summary">
             <h1 id="transfer-title">Передача</h1>
+            <span id="read-only" hidden>Только чтение</span>
             <time id="expires" hidden></time>
-            <button type="button" class="button" id="exchange-open" hidden>Доступ</button>
+            <button type="button" class="button" id="exchange-open" hidden>Доступ и защита</button>
+          </div>
+          <div class="mobile-views" aria-label="Содержимое">
+            <button class="button quiet" type="button" id="view-text" aria-pressed="true">Текст</button>
+            <button class="button quiet" type="button" id="view-files" aria-pressed="false">Файлы <span id="file-count">0</span></button>
           </div>
           <div class="work-grid">
             <div class="text-area">
@@ -62,6 +85,28 @@
               <p class="empty" id="files-empty">Файлов пока нет</p>
             </aside>
           </div>
+          <section id="share-dialog" aria-labelledby="share-title" hidden>
+            <div class="dialog-head">
+              <h2 id="share-title">Открыть на устройстве</h2>
+              <button class="button quiet" type="button" id="close-share" aria-label="Закрыть панель подключения">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+              </button>
+            </div>
+            <div class="publication-share">
+              <p id="share-instruction">Сканируй QR камерой или введи короткий код на главной Hop.</p>
+              <div id="qr-box"></div>
+              <section id="short-code-controls" aria-label="Короткий код" hidden>
+                <button type="button" id="enable-short-code" class="button quiet">Создать короткий код</button>
+                <input id="short-code" class="address" type="text" aria-label="Короткий код" readonly hidden>
+                <button type="button" id="copy-short-code" class="button quiet" hidden>Скопировать код</button>
+                <p id="short-code-status" role="status"></p>
+              </section>
+              <input id="share-url" class="address" type="text" aria-label="Полная ссылка" readonly>
+              <button type="button" id="share-writer" class="button quiet" hidden>Пригласить редактора</button>
+              <p id="qr-status" role="status"></p>
+            </div>
+            <button type="button" id="copy-link" class="button primary">Скопировать ссылку</button>
+          </section>
           <div id="work-actions" class="work-actions">
             <button type="button" id="send" class="button primary" hidden>Отправить</button>
             <button class="button" type="button" id="copy-text" hidden>Копировать текст</button>
@@ -70,39 +115,19 @@
       </main>
       <p id="status" role="status" aria-live="polite"></p>
     </div>
-    <dialog id="share-dialog" aria-labelledby="share-title">
-      <div class="dialog-head">
-        <h2 id="share-title">Открыть на другом устройстве</h2>
-        <button class="button" type="button" id="close-share" aria-label="Закрыть" autofocus>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
-        </button>
-      </div>
-      <div class="share-body">
-        <div id="qr-box"></div>
-        <div class="share-controls">
-          <label for="share-url">Полная ссылка</label>
-          <input id="share-url" class="address" type="text" readonly>
-          <button type="button" id="copy-link" class="button primary">Скопировать ссылку</button>
-          <p id="qr-status" role="status" aria-live="polite"></p>
-          <section id="short-code-controls" hidden aria-label="Короткий код">
-            <button type="button" id="enable-short-code" class="button">Получить код</button>
-            <label id="short-code-label" for="short-code" hidden>Введи код на главной Hop</label>
-            <input id="short-code" class="address" type="text" readonly hidden>
-            <p id="short-code-status" role="status"></p>
-          </section>
-        </div>
-      </div>
-    </dialog>
     <dialog id="exchange-dialog" aria-labelledby="exchange-title">
       <div class="dialog-head">
         <h2 id="exchange-title">Доступ к передаче</h2>
         <button type="button" id="exchange-close" class="button" autofocus>Закрыть</button>
       </div>
       <div class="share-controls" id="exchange-controls">
-        <button type="button" id="exchange-mode" class="button">Включить обмен</button>
-        <button type="button" id="exchange-invite" class="button">Пригласить участника</button>
-        <label for="writer-link" id="writer-label" hidden>Ссылка для участника</label>
+        <p>Полная ссылка и код дают право читать. Для редактирования отправь личную ссылку.</p>
+        <button type="button" id="exchange-invite" class="button primary">Создать ссылку редактора</button>
+        <label for="writer-link" id="writer-label" hidden>Одноразовая ссылка для редактора</label>
         <input id="writer-link" class="address" readonly hidden>
+        <button type="button" id="copy-writer" class="button" hidden>Скопировать приглашение</button>
+        <p id="writer-status" role="status"></p>
+        <button type="button" id="exchange-mode" class="button">Включить обмен</button>
         <p id="exchange-status" role="status"></p>
         <ul id="exchange-members" class="files" aria-label="Участники"></ul>
       </div>
