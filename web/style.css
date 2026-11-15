@@ -290,6 +290,6 @@ dialog::backdrop { background: var(--scrim); }
   .workspace:has(#share-dialog:not([hidden])) :is(.summary, .work-actions) { display: none; }
   .publication-share { grid-template-columns: minmax(76px, 32%) minmax(0, 1fr); }
   .publication-share > * { grid-column: 2; }
-  #qr-box { grid-column: 1; grid-row: 1 / span 5; }
+  #qr-box { grid-column: 1; grid-row: 1 / span 5; position: sticky; inset-block-start: 5px; align-self: start; }
   #share-instruction { text-align: start; }
 }

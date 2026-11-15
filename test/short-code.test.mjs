@@ -92,3 +92,28 @@ test('short code routes authenticate publication, survive rotation and restart, 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('rate limits use the address set by an explicitly trusted loopback proxy', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'hop-code-proxy-'));
+  let app;
+  try {
+    await assert.rejects(startServer(directory, { host: '0.0.0.0', trustLoopbackProxy: true }), /requires loopback/);
+    app = await startServer(directory, { trustLoopbackProxy: true, now: () => PERIOD, codeLimits: { perSource: 1, total: 2 } });
+    const base = app.origin + '/api/v1/short-code/';
+    const [config] = await (await fetch(base + 'keys')).json();
+    const request = address => fetch(base + 'evaluate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(address && { 'x-hop-client-ip': address }) },
+      body: JSON.stringify({ epoch: config.epoch, blinded: '0'.repeat(767) + '2' }),
+    });
+    assert.equal((await request()).status, 403);
+    assert.equal((await request('192.0.2.1, 192.0.2.2')).status, 403);
+    assert.equal((await request('192.0.2.1')).status, 200);
+    assert.equal((await request('192.0.2.1')).status, 429);
+    assert.equal((await request('2001:db8::1')).status, 200);
+    assert.equal((await request('192.0.2.2')).status, 429);
+  } finally {
+    await app?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

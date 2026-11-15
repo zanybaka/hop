@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
+import { isIP } from 'node:net';
 import { openStorage, StorageError } from './storage.mjs';
 import { createPairing, PairingError } from './pairing.mjs';
 import { CodeError, openCodeStore } from './short-code-store.mjs';
@@ -35,9 +36,10 @@ async function jsonBody(req, limit = 4096) {
 }
 
 export async function startServer(directory, {
-  host = '127.0.0.1', port = 0, codeLimits, basePath = '', publicOrigin, ...storageOptions
+  host = '127.0.0.1', port = 0, codeLimits, basePath = '', publicOrigin, trustLoopbackProxy = false, ...storageOptions
 } = {}) {
   if (!/^(?:\/[a-zA-Z0-9_-]+)*$/.test(basePath)) throw new Error('Invalid base path');
+  if (trustLoopbackProxy && host !== '127.0.0.1' && host !== '::1') throw new Error('Trusted proxy requires loopback');
   if (publicOrigin !== undefined) {
     const url = new URL(publicOrigin);
     if (url.origin !== publicOrigin || !['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid public origin');
@@ -87,7 +89,12 @@ export async function startServer(directory, {
             !/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
           return json(403, { error: 'forbidden' });
         }
-        return json(200, codes.evaluate(req.socket.remoteAddress ?? '', (await jsonBody(req)) ?? {}));
+        const directAddress = req.socket.remoteAddress ?? '';
+        const forwardedAddress = req.headers['x-hop-client-ip'];
+        if (trustLoopbackProxy && (typeof forwardedAddress !== 'string' || !isIP(forwardedAddress))) {
+          return json(403, { error: 'forbidden' });
+        }
+        return json(200, codes.evaluate(trustLoopbackProxy ? forwardedAddress : directAddress, (await jsonBody(req)) ?? {}));
       }
       const codePath = /^\/api\/v1\/short-code\/([a-f0-9]{64})$/.exec(path)?.[1];
       if (codePath && method === 'GET') return json(200, codes.read(codePath));
@@ -202,7 +209,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } else {
     const basePath = process.env.HOP_BASE_PATH ?? '';
     const app = await startServer(directory, { port: Number(port), basePath,
-      publicOrigin: process.env.HOP_PUBLIC_ORIGIN });
+      publicOrigin: process.env.HOP_PUBLIC_ORIGIN, trustLoopbackProxy: process.env.HOP_TRUST_LOOPBACK_PROXY === '1' });
     console.log(app.origin + basePath + '/');
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => app.close());
   }
