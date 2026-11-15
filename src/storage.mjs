@@ -424,7 +424,7 @@ export async function openStorage(directory, {
     addLocator.run(rotation.locator, id);
   }
 
-  function exchange(id, fingerprint, action = 'status', value, locator = id) {
+  function exchange(id, fingerprint, action = 'status', value, locator = id, generation) {
     if (!hexId(id) || !hexId(fingerprint)) throw new StorageError('invalid');
     const time = now();
     sweep(time);
@@ -442,9 +442,16 @@ export async function openStorage(directory, {
       if (typeof value !== 'string' || !BLOB.test(value)) throw new StorageError('invalid');
       transaction(() => {
         if (!rights.revoke(id, value)) throw new StorageError('missing');
+        rights.retireShare(id);
         clearKey.run(id, value);
         clearRecovery.run(id, value);
       });
+    } else if (action === 'share') {
+      if (!hexId(value) || sameOwner(row.ownerHash, value) || !Number.isSafeInteger(generation) || generation < 0) {
+        throw new StorageError('invalid');
+      }
+      if (locatorFor(id) !== locator || !rights.share(id, generation, value)) throw new StorageError('conflict');
+      return {};
     } else if (action === 'invite' || action === 'one-use') {
       if (!hexId(value) || sameOwner(row.ownerHash, value)) throw new StorageError('invalid');
       if (locatorFor(id) !== locator) throw new StorageError('conflict');
@@ -464,7 +471,7 @@ export async function openStorage(directory, {
       mode: enabled ? 'exchange' : 'read', version: row.version, expiresAt: expiresAt(row),
       canWrite: owner || enabled, locator: locatorFor(id),
       ...(recovery && { recovery }), ...(ownerKey && { ownerKey: JSON.parse(ownerKey) }),
-      ...(owner && { members: rights.list(id).map(({ id: memberId, seenAt }) => ({
+      ...(owner && { shareGeneration: rights.shareState(id).generation, members: rights.list(id).map(({ id: memberId, seenAt }) => ({
         id: memberId, present: seenAt !== null && seenAt > time - 60_000,
         key: JSON.parse(getKey.get(id, memberId)?.publicKey ?? 'null') ?? undefined,
       })) }),
@@ -486,6 +493,27 @@ export async function openStorage(directory, {
     });
   }
 
+  function claimShared(locator, invitationHash, deviceHash, key) {
+    if (![locator, invitationHash, deviceHash].every(hexId) || invitationHash === deviceHash) throw new StorageError('invalid');
+    sweep();
+    const row = recordAt(locator);
+    if (!row) throw new StorageError('missing');
+    if (!rights.matchesShare(row.id, invitationHash) || sameOwner(row.ownerHash, deviceHash)) {
+      throw new StorageError('forbidden');
+    }
+    const normalized = normalizedKey(key);
+    transaction(() => {
+      let grant = rights.find(row.id, deviceHash);
+      if (!grant) {
+        if (rights.list(row.id).length + rights.pending(row.id) >= 7) throw new StorageError('full');
+        rights.add(row.id, deviceHash);
+        grant = rights.find(row.id, deviceHash);
+      }
+      enrollKey(row.id, grant.member, normalized);
+    });
+    return { id: row.id };
+  }
+
   try { clean(now()); } catch (error) {
     db.close();
     ownerLock.close();
@@ -494,7 +522,7 @@ export async function openStorage(directory, {
   const timer = setInterval(backgroundCleanup, sweepInterval);
   timer.unref();
   return {
-    reserve, upload, openRead, confirm, cancel, exchange, claimWriter,
+    reserve, upload, openRead, confirm, cancel, exchange, claimWriter, claimShared,
     codeRecord(locator, ownerHash) {
       if (!hexId(locator) || (ownerHash !== undefined && !hexId(ownerHash))) throw new StorageError('invalid');
       const row = recordAt(locator);

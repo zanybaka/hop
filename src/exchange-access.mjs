@@ -19,12 +19,19 @@ export function openExchangeAccess(db, path) {
   const add = db.prepare('INSERT INTO exchange_access.grants VALUES (?, ?, ?, NULL)');
   const seen = db.prepare('UPDATE exchange_access.grants SET seenAt = ? WHERE id = ? AND member = ?');
   const invite = db.prepare('INSERT OR IGNORE INTO exchange_access.invitations VALUES (?, ?)');
-  const pending = db.prepare('SELECT COUNT(*) AS count FROM exchange_access.invitations WHERE id = ?');
+  const pending = db.prepare('SELECT COUNT(*) AS count FROM exchange_access.invitations WHERE id = ? AND length(fingerprint) = 64');
+  const shared = db.prepare("SELECT fingerprint FROM exchange_access.invitations WHERE id = ? AND fingerprint LIKE 'share:%'");
+  const replaceShare = db.prepare("UPDATE exchange_access.invitations SET fingerprint = ? WHERE id = ? AND fingerprint LIKE 'share:%'");
   const consume = db.prepare('DELETE FROM exchange_access.invitations WHERE id = ? AND fingerprint = ?');
   const eraseInvitations = db.prepare('DELETE FROM exchange_access.invitations WHERE id = ?');
   const eraseMode = db.prepare('DELETE FROM exchange_access.modes WHERE id = ?');
   const eraseGrants = db.prepare('DELETE FROM exchange_access.grants WHERE id = ?');
   const revoke = db.prepare('DELETE FROM exchange_access.grants WHERE id = ? AND member = ?');
+  function shareState(id) {
+    const value = shared.get(id)?.fingerprint;
+    const [, generation = '0', fingerprint] = value?.split(':') ?? [];
+    return { generation: Number(generation), fingerprint };
+  }
   return {
     enabled: id => Boolean(mode.get(id)?.enabled),
     update: (id, enabled) => update.run(id, Number(enabled)),
@@ -35,6 +42,19 @@ export function openExchangeAccess(db, path) {
     invite: (id, fingerprint) => invite.run(id, fingerprint),
     pending: id => pending.get(id).count,
     revoke: (id, member) => revoke.run(id, member).changes !== 0,
+    shareState,
+    share(id, generation, fingerprint) {
+      const current = shareState(id);
+      if (generation !== current.generation || (current.fingerprint && current.fingerprint !== fingerprint)) return false;
+      const value = 'share:' + generation + ':' + fingerprint;
+      if (!replaceShare.run(value, id).changes) invite.run(id, value);
+      return true;
+    },
+    matchesShare: (id, fingerprint) => shareState(id).fingerprint === fingerprint,
+    retireShare(id) {
+      const current = shareState(id);
+      if (current.fingerprint) replaceShare.run('share:' + (current.generation + 1) + ':', id);
+    },
     claim(id, invitation, device) {
       const existing = find.get(id, device);
       if (existing) return existing.member;

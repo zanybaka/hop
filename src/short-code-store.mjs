@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { hex, integer, modpow, PERIOD, RSA_BYTES } from './short-code-crypto.mjs';
 
 const HIT = /^[a-f0-9]{64}$/;
-const WRAPPER = /^[a-f0-9]{184}$/;
+const WRAPPER = /^[a-f0-9]{184}(?:[a-f0-9]{64})?$/;
 const BLIND = /^[a-f0-9]{768}$/;
 const WINDOW = 60_000;
 const valid = (pattern, value) => typeof value === 'string' && pattern.test(value);

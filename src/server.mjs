@@ -109,7 +109,7 @@ export async function startServer(directory, {
         codes.register(codePath, owner, body);
         return json(201, {});
       }
-      const settings = /^\/api\/v1\/exchange\/([a-f0-9]{64})(?:\/(mode|invite|one-use|claim|revoke-write|member-key))?$/.exec(path);
+      const settings = /^\/api\/v1\/exchange\/([a-f0-9]{64})(?:\/(mode|invite|one-use|claim|share|claim-shared|revoke-write|member-key))?$/.exec(path);
       if (settings && ((method === 'GET' && !settings[2]) || (method === 'POST' && settings[2]))) {
         if (!bearer) return json(403, { error: 'forbidden' });
         const fingerprint = createHash('sha256').update(bearer).digest('hex');
@@ -119,8 +119,11 @@ export async function startServer(directory, {
           storage.claimWriter(settings[1], fingerprint, body?.fingerprint, body?.locator, body?.key);
           return json(200, {});
         }
+        if (settings[2] === 'claim-shared') {
+          return json(200, storage.claimShared(settings[1], fingerprint, body?.fingerprint, body?.key));
+        }
         const inputField = { mode: 'mode', 'revoke-write': 'member', 'member-key': 'key' }[settings[2]] ?? 'fingerprint';
-        return json(200, storage.exchange(settings[1], fingerprint, settings[2], body?.[inputField], body?.locator));
+        return json(200, storage.exchange(settings[1], fingerprint, settings[2], body?.[inputField], body?.locator, body?.generation));
       }
       if (method === 'POST' && path === '/api/v1/reservations') {
         if (!bearer) return json(403, { error: 'forbidden' });

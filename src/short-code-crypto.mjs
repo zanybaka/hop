@@ -98,15 +98,18 @@ export async function wrapAccess({ lookup, key }, access) {
   const secret = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt']);
   const iv = random(12);
   const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: unhex(lookup) },
-    secret, unhex(access.id + access.secret));
+    secret, unhex(access.id + access.secret + (access.invite ?? '')));
   return hex(iv) + hex(new Uint8Array(encrypted));
 }
 
 export async function unwrapAccess({ lookup, key }, wrapper) {
-  if (typeof wrapper !== 'string' || !/^[a-f0-9]{184}$/.test(wrapper)) throw Error('Invalid code wrapper');
+  if (typeof wrapper !== 'string' || !/^[a-f0-9]{184}(?:[a-f0-9]{64})?$/.test(wrapper)) throw Error('Invalid code wrapper');
   const secret = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['decrypt']);
   const clear = new Uint8Array(await crypto.subtle.decrypt({
     name: 'AES-GCM', iv: unhex(wrapper.slice(0, 24)), additionalData: unhex(lookup),
   }, secret, unhex(wrapper.slice(24))));
-  return { id: hex(clear.subarray(0, 32)), secret: hex(clear.subarray(32)) };
+  return {
+    id: hex(clear.subarray(0, 32)), secret: hex(clear.subarray(32, 64)),
+    ...(clear.length === 96 && { invite: hex(clear.subarray(64)) }),
+  };
 }

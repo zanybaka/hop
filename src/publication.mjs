@@ -122,7 +122,7 @@ export async function readPublication(access, { confirm = true } = {}) {
 }
 
 export async function exchangeSettings(id, credential, action, payload) {
-  if (!/^[a-f0-9]{64}$/.test(id) || (action && !['mode', 'invite', 'one-use', 'claim', 'revoke-write', 'member-key'].includes(action))) {
+  if (!/^[a-f0-9]{64}$/.test(id) || (action && !['mode', 'invite', 'one-use', 'claim', 'share', 'claim-shared', 'revoke-write', 'member-key'].includes(action))) {
     throw new PublicationError(400);
   }
   const response = await checked(await fetch(api + '/exchange/' + id + (action ? '/' + action : ''), {
@@ -164,8 +164,34 @@ export async function claimWriter(id, invite, device, locator = id, publicKey) {
   });
 }
 
+export async function prepareShare(access, owner, group, settings) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(owner), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const message = new TextEncoder().encode('hop/share/v1/' + access.id + '/' + settings.shareGeneration);
+  const bytes = new Uint8Array(await crypto.subtle.sign('HMAC', key, message));
+  const invite = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  await exchangeSettings(group, owner, 'share', {
+    fingerprint: await fingerprintOf(invite), locator: access.id, generation: settings.shareGeneration,
+  });
+  return { ...access, invite };
+}
+
+export function sharedLink(page, access) {
+  const url = new URL(transferLink(page, access));
+  if (access.invite) url.hash += '/join/' + access.invite;
+  return url.href;
+}
+
+export function claimShared(locator, invite, device, publicKey) {
+  return fingerprintOf(device).then(fingerprint => exchangeSettings(locator, invite, 'claim-shared', { fingerprint, key: publicKey }));
+}
+
 export function readWriterLink(page) {
   const url = new URL(page);
+  const share = /^(#v1\/[a-f0-9]{64}\/[a-f0-9]{64})\/join\/([a-f0-9]{64})$/.exec(url.hash);
+  if (share) {
+    url.hash = share[1];
+    return { url, shared: share[2] };
+  }
   const match = /^(#v1\/[a-f0-9]{64}\/[a-f0-9]{64})\/write\/([a-f0-9]{64})(?:\/group\/([a-f0-9]{64}))?$/.exec(url.hash);
   if (!match) return { url };
   url.hash = match[1];

@@ -165,3 +165,64 @@ test('exchange grants persist, are scoped to one publication, and are checked ag
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('shared link and code claim distinct devices while mode and revocation still control writes', async () => {
+  const { claimShared, createPublication, exchangeSettings, prepareShare, readWriterLink, sharedLink } =
+    await import('../src/publication.mjs');
+  const { registerShortCode, resolveOpenCode } = await import('../src/short-code.mjs');
+  const { createRotationKeyPair } = await import('../src/rotation-client.mjs');
+  const directory = await mkdtemp(join(tmpdir(), 'hop-shared-access-'));
+  const app = await startServer(directory);
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (path, options) => originalFetch(new URL(path, app.origin), options);
+    const api = client(app.origin);
+    const { access, owner } = await createPublication({ text: 'Shared text' });
+    const settings = (credential, action, payload) => exchangeSettings(access.id, credential, action, payload);
+    const initial = await settings(owner);
+    const shared = await prepareShare(access, owner, access.id, initial);
+    assert.deepEqual(await prepareShare(access, owner, access.id, initial), shared);
+    const link = sharedLink(app.origin, shared);
+    assert.equal(readWriterLink(link).shared, shared.invite);
+    assert.equal(readWriterLink(sharedLink(app.origin, access)).shared, undefined);
+    const code = await registerShortCode(shared, owner);
+    assert.deepEqual((await resolveOpenCode(code)).access, shared);
+    const { publicKey } = await createRotationKeyPair();
+    const left = newTransfer().secret;
+    const right = newTransfer().secret;
+    const claim = (invite, device, locator = access.id) => claimShared(locator, invite, device, publicKey);
+    assert.deepEqual(await claim(shared.invite, left), { id: access.id });
+    assert.deepEqual(await claim(shared.invite, left), { id: access.id });
+    await claim(shared.invite, right);
+    await assert.rejects(claim(access.secret, newTransfer().secret), { status: 403 });
+    await assert.rejects(claim(shared.invite, owner), { status: 403 });
+    await assert.rejects(settings(left, 'mode', { mode: 'exchange' }), { status: 403 });
+    const encrypted = await encryptTransfer(access, { text: 'Shared edit' });
+    assert.equal((await api.reserve(access, left, 1, encrypted.size)).status, 403);
+    await settings(owner, 'mode', { mode: 'exchange' });
+    assert.equal((await settings(left)).canWrite, true);
+    assert.equal((await settings(right)).canWrite, true);
+    assert.equal((await api.reserve(access, shared.invite, 1, encrypted.size)).status, 403);
+    const reserved = await api.reserve(access, left, 1, encrypted.size);
+    assert.equal(reserved.status, 201);
+    await settings(owner, 'mode', { mode: 'read' });
+    assert.equal((await api.upload((await reserved.json()).token, encrypted)).status, 403);
+    for (let index = 0; index < 5; ++index) await claim(shared.invite, newTransfer().secret);
+    await assert.rejects(claim(shared.invite, newTransfer().secret), { status: 507 });
+    const { members } = await settings(owner);
+    await settings(owner, 'revoke-write', { member: members[0].id });
+    assert.equal((await api.read(access)).status, 200);
+    await assert.rejects(claim(shared.invite, left), { status: 403 });
+    await assert.rejects(claim(shared.invite, newTransfer().secret), { status: 403 });
+    await assert.rejects(prepareShare(access, owner, access.id, initial), { status: 409 });
+    const renewed = await prepareShare(access, owner, access.id, await settings(owner));
+    assert.notEqual(renewed.invite, shared.invite);
+    await claim(renewed.invite, newTransfer().secret);
+    await settings(owner, 'mode', { mode: 'exchange' });
+    assert.equal((await settings(right)).canWrite, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

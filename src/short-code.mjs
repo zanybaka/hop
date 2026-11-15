@@ -36,7 +36,7 @@ async function registerCode(access, write, pending, remember) {
     remember?.({ code, epoch: config.epoch });
     const keys = await derive(code, config);
     try {
-      await write({ epoch: config.epoch, lookup: keys.lookup, wrapper: await wrapAccess(keys, access) });
+      await write({ epoch: config.epoch, lookup: keys.lookup, wrapper: await wrapAccess(keys, access) }, keys);
       return code;
     } catch (error) {
       if (error.code !== 'conflict') throw error;
@@ -46,8 +46,11 @@ async function registerCode(access, write, pending, remember) {
   throw new ShortCodeError(503, 'busy');
 }
 
-export function registerShortCode(access, owner, pending, remember) {
-  return registerCode(access, data => request(access.id, data, owner), pending, remember);
+export function registerShortCode(access, owner, pending, remember, confirm) {
+  return registerCode(access, async (data, keys) => {
+    await request(access.id, data, owner);
+    if (confirm) confirm(await unwrapAccess(keys, (await request(keys.lookup)).wrapper));
+  }, pending, remember);
 }
 
 export function registerPairCode({ invitation, secret }, owner) {

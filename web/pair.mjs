@@ -23,6 +23,7 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
   const dismiss = byId('pair-close');
   const box = byId('pair-qr-box');
   const linkGroup = byId('pair-link-group');
+  const linkStatus = byId('pair-link-status');
   const codeGroup = byId('pair-code-group');
   const codeInput = byId('pair-code');
   const codeStatus = byId('pair-code-status');
@@ -44,7 +45,10 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
     input.value = '';
     codeGroup.hidden = true;
     codeInput.value = '';
-    codeStatus.hidden = true;
+    codeStatus.textContent = '';
+    codeStatus.removeAttribute('data-error');
+    linkStatus.textContent = '';
+    linkStatus.removeAttribute('data-error');
   }
 
   function dispose() {
@@ -172,7 +176,6 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
       linkGroup.hidden = false;
       status.textContent = 'Подключи второе устройство в этой сети.';
       codeStatus.textContent = 'Готовим короткий код…';
-      codeStatus.hidden = false;
       void showCode(current);
       void watch(current);
       try {
@@ -198,28 +201,33 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
       if (attempt !== current || linkGroup.hidden) return;
       codeInput.value = code.replace(/^(.{4})/, '$1 ');
       codeGroup.hidden = false;
-      codeStatus.hidden = true;
+      codeStatus.textContent = '';
     } catch {
       if (attempt === current && !linkGroup.hidden) {
         codeStatus.textContent = 'Код недоступен. Используй QR или ссылку.';
+        codeStatus.setAttribute('data-error', '');
       }
     }
   }
 
-  async function copyInvitation(field, message) {
+  async function copyInvitation(field, feedback, message) {
     const current = attempt;
     try {
       await navigator.clipboard.writeText(field.value);
-      if (attempt === current) status.textContent = message;
+      if (attempt === current) {
+        feedback.removeAttribute('data-error');
+        feedback.textContent = message;
+      }
     } catch {
       if (attempt === current) {
         field.select();
-        status.textContent = 'Скопируй выделенный текст.';
+        feedback.setAttribute('data-error', '');
+        feedback.textContent = 'Скопируй выделенный текст.';
       }
     }
   }
-  copy.addEventListener('click', () => void copyInvitation(input, 'Приглашение скопировано. Открой его на другом устройстве.'));
-  codeCopy.addEventListener('click', () => void copyInvitation(codeInput, 'Короткий код скопирован.'));
+  copy.addEventListener('click', () => void copyInvitation(input, linkStatus, 'Ссылка скопирована.'));
+  codeCopy.addEventListener('click', () => void copyInvitation(codeInput, codeStatus, 'Код скопирован.'));
 
   const decision = async accepted => {
     const current = attempt;
