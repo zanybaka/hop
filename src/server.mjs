@@ -4,10 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
-import { isIP } from 'node:net';
-import { openStorage, StorageError } from './storage.mjs';
+import { openStorage, StorageError, MAX_ENVELOPE_BYTES } from './storage.mjs';
 import { createPairing, PairingError } from './pairing.mjs';
 import { CodeError, openCodeStore } from './short-code-store.mjs';
+import { AdmissionError, clientAddress, createAdmission } from './admission.mjs';
 
 const STATIC = new Map([
   ['/', ['../web/index.html', 'text/html; charset=utf-8']],
@@ -36,7 +36,8 @@ async function jsonBody(req, limit = 4096) {
 }
 
 export async function startServer(directory, {
-  host = '127.0.0.1', port = 0, codeLimits, basePath = '', publicOrigin, trustLoopbackProxy = false, ...storageOptions
+  host = '127.0.0.1', port = 0, codeLimits, basePath = '', publicOrigin, trustLoopbackProxy = false,
+  admissionLimits, offerLifetime = 300_000, maxOffers = 1024, ...storageOptions
 } = {}) {
   if (!/^(?:\/[a-zA-Z0-9_-]+)*$/.test(basePath)) throw new Error('Invalid base path');
   if (trustLoopbackProxy && host !== '127.0.0.1' && host !== '::1') throw new Error('Trusted proxy requires loopback');
@@ -48,11 +49,23 @@ export async function startServer(directory, {
   let codes;
   try { codes = openCodeStore(directory, storage.codeRecord, { ...codeLimits, now: storageOptions.now }); }
   catch (error) { await storage.close(); throw error; }
+  let pairing;
+  let admission;
+  try {
+    pairing = createPairing({ now: storageOptions.now, offerLifetime, maxOffers });
+    admission = createAdmission({
+      now: storageOptions.now, lease: storageOptions.lease ?? 30_000, offerLifetime, ...admissionLimits,
+    });
+  } catch (error) {
+    codes.close();
+    await storage.close();
+    throw error;
+  }
   const codeCleanup = setInterval(() => {
     try { codes.sweep(); } catch { /* Retry on the next cleanup or request. */ }
+    try { admission.sweep(); } catch { /* Retry on the next cleanup or request. */ }
   }, storageOptions.sweepInterval ?? 30_000);
   codeCleanup.unref();
-  const pairing = createPairing({ now: storageOptions.now });
   const handlers = new Set();
   async function handle(req, res) {
     const mounted = req.url?.startsWith(basePath + '/');
@@ -89,12 +102,9 @@ export async function startServer(directory, {
             !/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) {
           return json(403, { error: 'forbidden' });
         }
-        const directAddress = req.socket.remoteAddress ?? '';
-        const forwardedAddress = req.headers['x-hop-client-ip'];
-        if (trustLoopbackProxy && (typeof forwardedAddress !== 'string' || !isIP(forwardedAddress))) {
-          return json(403, { error: 'forbidden' });
-        }
-        return json(200, codes.evaluate(trustLoopbackProxy ? forwardedAddress : directAddress, (await jsonBody(req)) ?? {}));
+        const address = clientAddress(req, trustLoopbackProxy);
+        if (address === null) return json(403, { error: 'forbidden' });
+        return json(200, codes.evaluate(address, (await jsonBody(req)) ?? {}));
       }
       const codePath = /^\/api\/v1\/short-code\/([a-f0-9]{64})$/.exec(path)?.[1];
       if (codePath && method === 'GET') {
@@ -127,19 +137,34 @@ export async function startServer(directory, {
       }
       if (method === 'POST' && path === '/api/v1/reservations') {
         if (!bearer) return json(403, { error: 'forbidden' });
+        const address = clientAddress(req, trustLoopbackProxy);
+        if (address === null) return json(403, { error: 'forbidden' });
         const ownerHash = createHash('sha256').update(bearer).digest('hex');
         const body = await jsonBody(req, 40_000);
         if (!body || !Number.isSafeInteger(body.bytes) || body.bytes < 32) throw new StorageError('invalid');
-        const { id, locator, rotation, version, bytes, hasFiles, protected: guarded, lifetime } = body;
-        return json(201, storage.reserve({ id, locator, rotation, version, bytes, ownerHash, hasFiles, protected: guarded, lifetime }));
+        if (body.bytes > MAX_ENVELOPE_BYTES) throw new StorageError('size');
+        const hold = admission.claimReserve(address, body.bytes);
+        let created;
+        try {
+          const { id, locator, rotation, version, bytes, hasFiles, protected: guarded, lifetime } = body;
+          created = storage.reserve({ id, locator, rotation, version, bytes, ownerHash, hasFiles, protected: guarded, lifetime });
+        } catch (error) {
+          admission.cancelReserve(hold);
+          throw error;
+        }
+        admission.commitReserve(hold, created.token);
+        return json(201, created);
       }
       const upload = /^\/api\/v1\/uploads\/([a-f0-9-]{36})$/.exec(path);
       if (upload && method === 'PUT') {
         const declared = req.headers['content-length'];
         if (declared === undefined) return json(411, { error: 'length-required' });
-        return json(201, await storage.upload(upload[1], req, Number(declared)));
+        const result = await storage.upload(upload[1], req, Number(declared));
+        admission.releaseReserve(upload[1]);
+        return json(201, result);
       }
       if (upload && method === 'DELETE') {
+        admission.releaseReserve(upload[1]);
         storage.cancel(upload[1]);
         return json(200, {});
       }
@@ -162,7 +187,19 @@ export async function startServer(directory, {
         if (req.headers.origin && req.headers.origin !== (publicOrigin ?? `http://${req.headers.host}`)) {
           return json(403, { error: 'forbidden' });
         }
-        if (route === 'offers' && method === 'POST') return json(201, pairing.offer());
+        if (route === 'offers' && method === 'POST') {
+          const address = clientAddress(req, trustLoopbackProxy);
+          if (address === null) return json(403, { error: 'forbidden' });
+          const hold = admission.claimPair(address);
+          let created;
+          try { created = pairing.offer(); }
+          catch (error) {
+            admission.cancelPair(hold);
+            throw error;
+          }
+          admission.commitPair(hold, created.expiresAt);
+          return json(201, created);
+        }
         if (route === 'joins' && method === 'POST') return json(201, pairing.join((await jsonBody(req))?.invitation));
         if (!bearer) return json(403, { error: 'forbidden' });
         if (route === 'code' && method === 'POST') {
@@ -179,8 +216,10 @@ export async function startServer(directory, {
       }
       json(404, { error: 'missing' });
     } catch (error) {
-      if (error instanceof StorageError || error instanceof PairingError || error instanceof CodeError) {
-        json(statuses[error.code] ?? 500, { error: error.code }, error.code === 'limited' ? { 'retry-after': '60' } : undefined);
+      if (error instanceof StorageError || error instanceof PairingError || error instanceof CodeError ||
+          error instanceof AdmissionError) {
+        const retry = error.retryAfter ?? 60;
+        json(statuses[error.code] ?? 500, { error: error.code }, error.code === 'limited' ? { 'retry-after': String(retry) } : undefined);
       }
       else if (error.code === 'ENOENT' && STATIC.has(path)) json(404, { error: 'missing' });
       else json(500, { error: 'server' });

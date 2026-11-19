@@ -190,8 +190,10 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
         box.replaceChildren(img);
         box.hidden = false;
       } catch { /* The invitation can still be copied. */ }
-    } catch {
-      error(current, 'Не удалось создать приглашение. Попробуй ещё раз.');
+    } catch (failure) {
+      error(current, failure?.message?.includes('(429)')
+        ? 'Слишком много приглашений. Подожди и попробуй ещё раз.'
+        : 'Не удалось создать приглашение. Попробуй ещё раз.');
     }
   });
 
