@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
+import { chmod } from 'node:fs/promises';
 import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +9,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { HOUR } from '../src/expiry.mjs';
+import { openCodeStore } from '../src/short-code-store.mjs';
 import { MAX_ENVELOPE_BYTES, openStorage } from '../src/storage.mjs';
 
 const id = 'a'.repeat(64);
@@ -155,6 +157,26 @@ test('only complete current-version reads extend inactivity and absolute expiry 
   time = 2 * HOUR;
   assert.throws(() => f.store.openRead(id), { code: 'missing' });
   assert.deepEqual(f.store.usage(), { reserved: 0, allocated: 0 });
+});
+
+test('state directory, databases and the lock journal are readable only by the owner', async t => {
+  const f = await fixture(t);
+  const mode = async name => (await stat(join(f.directory, name))).mode & 0o777;
+  assert.equal(await mode('.'), 0o700);
+  assert.equal(await mode('blobs'), 0o700);
+  for (const name of ['owner.sqlite', 'records.sqlite', 'exchange.sqlite', 'owner.sqlite-journal']) {
+    assert.equal(await mode(name), 0o600, name);
+  }
+  await f.store.close();
+  await chmod(join(f.directory, 'records.sqlite'), 0o644);
+  await chmod(f.directory, 0o755);
+  await f.restart();
+  assert.equal(await mode('.'), 0o700);
+  assert.equal(await mode('records.sqlite'), 0o600);
+  const codes = openCodeStore(f.directory, () => ({ absoluteDeadline: 1 }));
+  t.after(() => codes.close());
+  assert.equal(await mode('short-code.sqlite'), 0o600);
+  assert.equal(await mode('short-code-keys.sqlite'), 0o600);
 });
 
 test('expired data is cleaned from disk while storage is idle', async t => {

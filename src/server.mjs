@@ -74,6 +74,7 @@ export async function startServer(directory, {
     const headers = {
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
+      'strict-transport-security': 'max-age=31536000',
       'x-content-type-options': 'nosniff',
       'content-security-policy': "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' blob:; script-src 'self'",
     };

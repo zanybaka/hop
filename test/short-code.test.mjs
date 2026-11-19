@@ -32,7 +32,9 @@ test('short code routes authenticate publication, survive rotation and restart, 
     const reservation = await request('/api/v1/reservations', { id: access.id, version: 0, bytes: encrypted.size }, owner);
     const { token } = await reservation.json();
     assert.equal((await fetch(app.origin + '/api/v1/uploads/' + token, { method: 'PUT', body: encrypted })).status, 201);
-    const [first] = await (await request(codeApi + 'keys')).json();
+    const keysResponse = await request(codeApi + 'keys');
+    assert.equal(keysResponse.headers.get('strict-transport-security'), 'max-age=31536000');
+    const [first] = await keysResponse.json();
     const code = newCode(first.epoch);
     assert.equal(normalizeCode(code.slice(0, 4).toLowerCase() + '-' + code.slice(4)), code);
     assert.equal(normalizeCode('ſ2345678'), null);

@@ -1,5 +1,5 @@
 import { createPublicKey, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createReadStream, createWriteStream, closeSync, fstatSync, fsyncSync, mkdirSync,
+import { createReadStream, createWriteStream, chmodSync, closeSync, fstatSync, fsyncSync, mkdirSync,
   openSync, readdirSync, statSync, statfsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,6 +16,7 @@ const hexId = value => typeof value === 'string' && ID.test(value);
 const memberId = value => value === 'owner' || typeof value === 'string' && BLOB.test(value);
 const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
 const sameOwner = (first, second) => timingSafeEqual(Buffer.from(first, 'hex'), Buffer.from(second, 'hex'));
+const ownerOnly = path => chmodSync(path, 0o600);
 
 export class StorageError extends Error {
   constructor(code, options) {
@@ -35,13 +36,25 @@ export async function openStorage(directory, {
   }
   const blobs = join(directory, 'blobs');
   mkdirSync(blobs, { recursive: true, mode: 0o700 });
-  const ownerLock = new DatabaseSync(join(directory, 'owner.sqlite'));
+  chmodSync(directory, 0o700);
+  chmodSync(blobs, 0o700);
+  const ownerPath = join(directory, 'owner.sqlite');
+  const recordsPath = join(directory, 'records.sqlite');
+  const exchangePath = join(directory, 'exchange.sqlite');
+  closeSync(openSync(ownerPath, 'a', 0o600));
+  closeSync(openSync(recordsPath, 'a', 0o600));
+  closeSync(openSync(exchangePath, 'a', 0o600));
+  ownerOnly(ownerPath);
+  ownerOnly(recordsPath);
+  ownerOnly(exchangePath);
+  const ownerLock = new DatabaseSync(ownerPath);
   let db;
   let rights;
   try {
     ownerLock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');
-    db = new DatabaseSync(join(directory, 'records.sqlite'));
-    rights = openExchangeAccess(db, join(directory, 'exchange.sqlite'));
+    for (const name of readdirSync(directory)) if (name.endsWith('-journal')) ownerOnly(join(directory, name));
+    db = new DatabaseSync(recordsPath);
+    rights = openExchangeAccess(db, exchangePath);
     db.exec(`PRAGMA main.journal_mode=DELETE;
       PRAGMA main.synchronous=FULL;
       CREATE TABLE IF NOT EXISTS records (

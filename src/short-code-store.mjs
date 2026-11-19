@@ -1,5 +1,5 @@
 import { constants, createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, privateDecrypt } from 'node:crypto';
-import { closeSync, openSync } from 'node:fs';
+import { chmodSync, closeSync, openSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { hex, integer, modpow, PERIOD, RSA_BYTES } from './short-code-crypto.mjs';
@@ -19,13 +19,16 @@ export class CodeError extends Error {
 
 export function openCodeStore(directory, authorize, { now = Date.now, perSource = 30, total = 1800 } = {}) {
   if (![perSource, total].every(value => Number.isSafeInteger(value) && value > 0)) throw new CodeError('invalid');
+  chmodSync(directory, 0o700);
   const file = join(directory, 'short-code.sqlite');
+  const keyFile = join(directory, 'short-code-keys.sqlite');
   closeSync(openSync(file, 'a', 0o600));
+  closeSync(openSync(keyFile, 'a', 0o600));
+  chmodSync(file, 0o600);
+  chmodSync(keyFile, 0o600);
   const db = new DatabaseSync(file);
   let secrets;
   try {
-    const keyFile = join(directory, 'short-code-keys.sqlite');
-    closeSync(openSync(keyFile, 'a', 0o600));
     secrets = new DatabaseSync(keyFile);
     secrets.exec(`PRAGMA secure_delete=ON;
       CREATE TABLE IF NOT EXISTS keys (epoch INTEGER PRIMARY KEY, material BLOB NOT NULL);
