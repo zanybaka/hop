@@ -248,7 +248,8 @@ export async function openStorage(directory, {
       if (locatorFor(entry.id) !== entry.locator || (!row && findLocator.get(entry.id))) throw new StorageError('conflict');
       const state = row ? { ...row, hasFiles: entry.state.hasFiles } : entry.state;
       if (isExpired(state, timestamp)) throw new StorageError('expired');
-      if (statSync(path).blocks * 512 > round(entry.bytes)) throw new StorageError('full');
+      const usage = measure();
+      if (usage.allocated + usage.reserved > capacity) throw new StorageError('full');
       const directoryFd = openSync(blobs, 'r');
       try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
       const version = entry.version + 1;
