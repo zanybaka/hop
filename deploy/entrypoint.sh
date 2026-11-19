@@ -4,6 +4,16 @@ set -eu
 : "${HOP_PUBLIC_ORIGIN:?Public origin is required}"
 trusted=$(printf '%s' "$ACCESS_TRUSTED_PROXY_CIDRS" | tr ',' ' ')
 case "$trusted" in *[!0-9a-fA-F:./\ ]*) exit 1;; esac
+allow=""
+closed=""
+if [ -n "${ACCESS_ALLOW_IPS:-}" ]; then
+  allow=$(printf '%s' "$ACCESS_ALLOW_IPS" | tr ',' ' ')
+  case "$allow" in *[!0-9a-fA-F:./\ ]*) exit 1;; esac
+  closed="    @closed not client_ip ${allow}
+    handle @closed {
+        respond 403
+    }"
+fi
 cat >/tmp/Caddyfile <<CONFIG
 {
     admin off
@@ -20,6 +30,7 @@ cat >/tmp/Caddyfile <<CONFIG
         rewrite * /
         reverse_proxy 127.0.0.1:49185
     }
+${closed}
     handle {
         reverse_proxy 127.0.0.1:49185 {
             header_up X-Hop-Client-IP {client_ip}

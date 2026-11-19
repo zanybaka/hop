@@ -11,6 +11,7 @@ import { AdmissionError, clientAddress, createAdmission } from './admission.mjs'
 
 const STATIC = new Map([
   ['/', ['../web/index.html', 'text/html; charset=utf-8']],
+  ['/version.json', ['../web/version.json', 'application/json']],
   ['/style.css', ['../web/style.css', 'text/css']],
   ['/app.mjs', ['../web/app.mjs', 'text/javascript']],
   ['/pair.mjs', ['../web/pair.mjs', 'text/javascript']],

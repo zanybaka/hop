@@ -35,5 +35,5 @@ jobs:
           trap 'rm -rf "$DOCKER_CONFIG"' EXIT
           printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           image="ghcr.io/$GITHUB_REPOSITORY:sha-$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
-          docker build --provenance=false --sbom=false --tag "$image" .
+          docker build --provenance=false --sbom=false --build-arg GIT_SHA="$GITHUB_SHA" --tag "$image" .
           docker push "$image"
