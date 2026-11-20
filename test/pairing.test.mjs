@@ -96,6 +96,24 @@ test('only the approved pair exchanges an immutable offer followed by an answer'
   assert.throws(() => pairing.writeSignal(owner, offer), { code: 'missing' });
 });
 
+test('relay frames move only to the other approved browser and stop when the queue is full', () => {
+  const pairing = createPairing();
+  const { invitation, owner } = pairing.offer();
+  const { recipient } = pairing.join(invitation);
+  const frame = Buffer.from([1, 2, 3]);
+  assert.throws(() => pairing.pushRelay(owner, frame), { code: 'conflict' });
+  pairing.decide(owner, 'approved');
+  assert.equal(pairing.takeRelay(recipient), null);
+  assert.throws(() => pairing.pushRelay(owner, Buffer.alloc(0)), { code: 'invalid' });
+  assert.throws(() => pairing.pushRelay(owner, Buffer.alloc(16 * 1024 + 1)), { code: 'invalid' });
+  assert.deepEqual(pairing.pushRelay(owner, frame), {});
+  assert.equal(pairing.takeRelay(owner), null);
+  assert.deepEqual(pairing.takeRelay(recipient), frame);
+  for (let index = 0; index < 32; index += 1) pairing.pushRelay(recipient, Buffer.from([index]));
+  assert.throws(() => pairing.pushRelay(recipient, Buffer.from([32])), { code: 'full' });
+  assert.equal(pairing.takeRelay(owner)[0], 0);
+});
+
 test('signal accepts only the two specified fields and bounds UTF-8 size', () => {
   const pairing = createPairing();
   const { invitation, owner } = pairing.offer();

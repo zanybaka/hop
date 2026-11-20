@@ -24,6 +24,26 @@ export function decidePair(capability, approved) {
 export function cancelPair(capability) { return call('cancel', { capability, method: 'POST' }); }
 export function pairStatus(capability, signal) { return call('status', { capability, signal }); }
 
+export async function writeRelay(capability, bytes, signal) {
+  const response = await fetch(route + 'relay', {
+    method: 'POST', signal,
+    headers: { authorization: 'Bearer ' + capability, 'content-type': 'application/octet-stream' },
+    body: bytes,
+  });
+  if (response.status === 507) return false;
+  if (!response.ok) throw Error(`Pairing request failed (${response.status})`);
+  return true;
+}
+
+export async function readRelay(capability, signal) {
+  const response = await fetch(route + 'relay', {
+    signal, headers: { authorization: 'Bearer ' + capability },
+  });
+  if (response.status === 204) return null;
+  if (!response.ok) throw Error(`Pairing request failed (${response.status})`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
 export function invitationLink(page, invitation, secret) {
   if (!token.test(invitation) || !token.test(secret)) throw Error('Invalid pair invitation');
   const url = new URL(page);

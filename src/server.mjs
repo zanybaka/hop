@@ -184,7 +184,7 @@ export async function startServer(directory, {
       }
       const receipt = /^\/api\/v1\/receipts\/([a-f0-9-]{36})$/.exec(path);
       if (receipt && method === 'POST') return json(200, await storage.confirm(receipt[1]));
-      const route = /^\/api\/v1\/pairing\/(offers|joins|status|decision|cancel|signal|code)$/.exec(path)?.[1];
+      const route = /^\/api\/v1\/pairing\/(offers|joins|status|decision|cancel|signal|code|relay)$/.exec(path)?.[1];
       if (route) {
         if (req.headers.origin && req.headers.origin !== (publicOrigin ?? `http://${req.headers.host}`)) {
           return json(403, { error: 'forbidden' });
@@ -215,6 +215,27 @@ export async function startServer(directory, {
         if (route === 'cancel' && method === 'POST') return json(200, pairing.cancel(bearer));
         if (route === 'signal' && method === 'GET') return json(200, { signal: pairing.readSignal(bearer) });
         if (route === 'signal' && method === 'POST') return json(200, pairing.writeSignal(bearer, await jsonBody(req, 400_000)));
+        if (route === 'relay' && method === 'GET') {
+          const frame = pairing.takeRelay(bearer);
+          if (!frame) {
+            res.writeHead(204, headers);
+            res.end();
+            return;
+          }
+          res.writeHead(200, { ...headers, 'content-type': 'application/octet-stream', 'content-length': frame.length });
+          res.end(frame);
+          return;
+        }
+        if (route === 'relay' && method === 'POST') {
+          const chunks = [];
+          let size = 0;
+          for await (const chunk of req) {
+            size += chunk.length;
+            if (size > 16 * 1024) throw new PairingError('invalid');
+            chunks.push(chunk);
+          }
+          return json(201, pairing.pushRelay(bearer, Buffer.concat(chunks)));
+        }
       }
       json(404, { error: 'missing' });
     } catch (error) {

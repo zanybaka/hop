@@ -3,6 +3,8 @@ import { createHash, randomBytes } from 'node:crypto';
 const capability = /^[a-f0-9]{64}$/;
 const shortCodeWrapper = /^[a-f0-9]{184}$/;
 export const MAX_SIGNAL_BYTES = 65_536;
+export const MAX_RELAY_FRAME = 16 * 1024;
+const MAX_RELAY_QUEUE = 32;
 const digest = token => createHash('sha256').update(token).digest('hex');
 const issue = () => randomBytes(32).toString('hex');
 
@@ -139,6 +141,21 @@ export function createPairing({ now = Date.now, offerLifetime = 300_000, maxOffe
       const { entry, role } = approved(token);
       const type = role === 'owner' ? 'answer' : 'offer';
       return entry[type] === undefined ? null : { type, sdp: entry[type] };
+    },
+    pushRelay(token, bytes) {
+      const { entry, role } = approved(token);
+      const binary = Buffer.isBuffer(bytes) || bytes instanceof Uint8Array;
+      if (!binary || bytes.length === 0 || bytes.length > MAX_RELAY_FRAME) throw new PairingError('invalid');
+      const key = role === 'owner' ? 'toRecipient' : 'toOwner';
+      const queue = entry[key] ?? (entry[key] = []);
+      if (queue.length >= MAX_RELAY_QUEUE) throw new PairingError('full');
+      queue.push(Buffer.from(bytes));
+      return {};
+    },
+    takeRelay(token) {
+      const { entry, role } = approved(token);
+      const queue = role === 'owner' ? entry.toOwner : entry.toRecipient;
+      return queue?.shift() ?? null;
     },
   };
 }

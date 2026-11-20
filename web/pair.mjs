@@ -1,4 +1,4 @@
-import { offerPair, joinPair, decidePair, cancelPair, pairStatus, invitationLink, pairSignals } from './src/pairing-client.mjs';
+import { offerPair, joinPair, decidePair, cancelPair, pairStatus, invitationLink, pairSignals, writeRelay, readRelay } from './src/pairing-client.mjs';
 import { connectLocal } from './src/local-channel.mjs';
 import { registerPairCode } from './src/short-code.mjs';
 import { qrImage } from './qr.mjs';
@@ -127,6 +127,8 @@ export function setupPairing({ onConnected, onEnvelope, onDisconnected }) {
       signal.addEventListener('abort', activate, { once: true });
       const channel = await connectLocal({
         ...signals, role: current.role, signal,
+        writeRelay: bytes => writeRelay(current.token, bytes, signal),
+        readRelay: () => readRelay(current.token, signal),
         async onMessage(blob) {
           await ready;
           signal.throwIfAborted();

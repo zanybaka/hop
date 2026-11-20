@@ -2,6 +2,10 @@ import { DIRECT_HEADER_BYTES } from './direct-revision.mjs';
 
 // WebRTC transports already encrypted HOPG envelopes. Signals contain SDP only.
 const CHANNEL = 'hop-envelope-v1';
+// Chrome and Safari hide LAN addresses as mDNS names. Those names often do not resolve between the two browsers, so the channel stays new until the timeout. A public STUN server adds a numeric reflexive address. ADR 007.
+const ICE_SERVERS = [
+  { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] },
+];
 const MAX_BYTES = 8 + 6_311_936 + 100_000_000 + 32 + DIRECT_HEADER_BYTES;
 const FRAME_BYTES = 16 * 1024;
 const CHUNK_BYTES = FRAME_BYTES - 1;
@@ -67,18 +71,24 @@ function pause(signal) {
 }
 
 export async function connectLocal({
-  role, sendSignal, readSignal, onMessage, onClose = () => {}, signal, timeoutMs = 15_000,
+  role, sendSignal, readSignal, writeRelay, readRelay, onMessage, onClose = () => {}, signal, timeoutMs = 30_000,
 }) {
   if (role !== 'owner' && role !== 'recipient') throw new TypeError('Unknown pairing role');
+  const relayReady = typeof writeRelay === 'function' && typeof readRelay === 'function';
+  if ((writeRelay !== undefined || readRelay !== undefined) && !relayReady) throw new TypeError('Invalid channel options');
   if (![sendSignal, readSignal, onMessage, onClose].every(callback => typeof callback === 'function') ||
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
     throw new TypeError('Invalid channel options');
   }
   signal?.throwIfAborted();
-  const peer = new RTCPeerConnection({ iceServers: [] });
+  const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   const lifecycle = new AbortController();
   const setupTimer = setTimeout(() => close(new Error('Local connection timed out')), timeoutMs);
   let channel;
+  let direct = null;
+  const relaySends = [];
+  let relayBuffered = 0;
+  let pumping = false;
   let established = false;
   let sending = false;
   let incoming;
@@ -93,14 +103,15 @@ export async function connectLocal({
     clearTimeout(incoming?.timer);
     incoming = undefined;
     signal?.removeEventListener('abort', cancelled);
-    channel?.close();
+    direct?.close();
+    if (!relayReady) channel?.close();
     peer.close();
     if (established) onClose();
   }
   const cancelled = () => close(signal.reason);
   signal?.addEventListener('abort', cancelled, { once: true });
   peer.addEventListener('connectionstatechange', () => {
-    if (['failed', 'closed', 'disconnected'].includes(peer.connectionState)) close();
+    if (!relayReady && ['failed', 'closed', 'disconnected'].includes(peer.connectionState)) close();
   });
 
   function receive(event) {
@@ -141,19 +152,91 @@ export async function connectLocal({
     }).catch(close);
   }
 
-  function attach(candidate) {
-    if (channel || candidate.label !== CHANNEL || !candidate.ordered ||
-        candidate.maxPacketLifeTime !== null || candidate.maxRetransmits !== null) {
-      candidate.close();
-      close(new Error('Unexpected local data channel'));
-      return;
+  function noteLow() {
+    if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) channel.dispatchEvent(new Event('bufferedamountlow'));
+  }
+
+  async function pumpSends() {
+    if (pumping) return;
+    pumping = true;
+    try {
+      while (relaySends.length && !lifecycle.signal.aborted) {
+        const next = relaySends[0];
+        if (direct?.readyState === 'open') direct.send(next);
+        else if (!await writeRelay(next)) {
+          await pause(lifecycle.signal);
+          continue;
+        }
+        relaySends.shift();
+        relayBuffered -= next.byteLength;
+        noteLow();
+      }
+    } catch (error) {
+      if (!lifecycle.signal.aborted && direct?.readyState !== 'open') close(error);
+    } finally {
+      pumping = false;
     }
-    channel = candidate;
+  }
+
+  async function pumpReads() {
+    try {
+      while (!lifecycle.signal.aborted) {
+        const frame = await readRelay();
+        if (lifecycle.signal.aborted) return;
+        if (!frame?.byteLength) {
+          await pause(lifecycle.signal);
+          continue;
+        }
+        const bytes = frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength);
+        channel.dispatchEvent(new MessageEvent('message', { data: bytes }));
+      }
+    } catch (error) {
+      if (!lifecycle.signal.aborted && direct?.readyState !== 'open') close(error);
+    }
+  }
+
+  if (relayReady) {
+    channel = new EventTarget();
     channel.binaryType = 'arraybuffer';
     channel.bufferedAmountLowThreshold = LOW_WATER;
+    channel.readyState = 'open';
+    Object.defineProperty(channel, 'bufferedAmount', {
+      get() { return relayBuffered + (direct?.bufferedAmount || 0); },
+    });
+    channel.send = bytes => {
+      const copy = new Uint8Array(bytes);
+      if (direct?.readyState === 'open' && relaySends.length === 0) {
+        direct.send(copy);
+        return;
+      }
+      relaySends.push(copy);
+      relayBuffered += copy.byteLength;
+      void pumpSends();
+    };
     channel.addEventListener('message', receive);
-    channel.addEventListener('close', () => close());
-    channel.addEventListener('error', () => close(new Error('Local data channel failed')));
+    void pumpReads();
+  }
+
+  function attach(candidate) {
+    if (direct || (!relayReady && channel) || candidate.label !== CHANNEL || !candidate.ordered ||
+        candidate.maxPacketLifeTime !== null || candidate.maxRetransmits !== null) {
+      candidate.close();
+      if (!relayReady) close(new Error('Unexpected local data channel'));
+      return;
+    }
+    direct = candidate;
+    const target = relayReady ? direct : (channel = candidate);
+    target.binaryType = 'arraybuffer';
+    target.bufferedAmountLowThreshold = LOW_WATER;
+    target.addEventListener('message', receive);
+    if (relayReady) {
+      target.addEventListener('bufferedamountlow', noteLow);
+      target.addEventListener('close', () => { if (direct === candidate) direct = null; });
+      target.addEventListener('error', () => { if (direct === candidate) direct = null; });
+      return;
+    }
+    target.addEventListener('close', () => close());
+    target.addEventListener('error', () => close(new Error('Local data channel failed')));
   }
 
   peer.addEventListener('datachannel', ({ channel }) => {
@@ -164,7 +247,12 @@ export async function connectLocal({
   const operation = fn => abortable(fn, lifecycle.signal);
   const localDescription = async description => {
     await operation(() => peer.setLocalDescription(description));
-    await waitFor(peer, 'icegatheringstatechange', () => peer.iceGatheringState === 'complete', lifecycle.signal);
+    const started = Date.now();
+    while (peer.iceGatheringState !== 'complete' && Date.now() - started < 4_000) {
+      const gathered = peer.localDescription?.sdp ?? '';
+      if (gathered.includes(' typ srflx') || gathered.includes(' typ relay')) break;
+      await pause(lifecycle.signal);
+    }
     const { type, sdp } = peer.localDescription;
     await operation(() => sendSignal({ type, sdp }, { signal: lifecycle.signal }));
   };
@@ -180,7 +268,7 @@ export async function connectLocal({
     }
   }
 
-  try {
+  async function negotiate() {
     if (role === 'owner') {
       attach(peer.createDataChannel(CHANNEL, { ordered: true }));
       await localDescription(await operation(() => peer.createOffer()));
@@ -189,15 +277,33 @@ export async function connectLocal({
       await remoteDescription('offer');
       await localDescription(await operation(() => peer.createAnswer()));
     }
+    if (relayReady) {
+      established = true;
+      clearTimeout(setupTimer);
+      void waitFor(peer, 'hopchannel', () => direct != null, lifecycle.signal)
+        .then(() => waitFor(direct, 'open', () => direct?.readyState === 'open', lifecycle.signal))
+        .catch(() => {});
+      return;
+    }
     await waitFor(peer, 'hopchannel', () => channel != null, lifecycle.signal);
     await waitFor(channel, 'open', () => channel.readyState === 'open', lifecycle.signal);
     if (peer.sctp?.maxMessageSize < FRAME_BYTES) throw new Error('Local channel message limit is too small');
     lifecycle.signal.throwIfAborted();
     established = true;
     clearTimeout(setupTimer);
+  }
+
+  try {
+    await negotiate();
+    if (!relayReady) {
+      established = true;
+      clearTimeout(setupTimer);
+    }
   } catch (error) {
-    close(error);
-    throw error;
+    if (!relayReady || !established) {
+      close(error);
+      throw error;
+    }
   }
 
   return {
