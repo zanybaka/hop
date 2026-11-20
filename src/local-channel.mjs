@@ -71,7 +71,7 @@ function pause(signal) {
 }
 
 export async function connectLocal({
-  role, sendSignal, readSignal, writeRelay, readRelay, onMessage, onClose = () => {}, signal, timeoutMs = 30_000,
+  role, sendSignal, readSignal, writeRelay, readRelay, leaveRelay, onMessage, onClose = () => {}, signal, timeoutMs = 30_000,
 }) {
   if (role !== 'owner' && role !== 'recipient') throw new TypeError('Unknown pairing role');
   const relayReady = typeof writeRelay === 'function' && typeof readRelay === 'function';
@@ -98,6 +98,7 @@ export async function connectLocal({
 
   function close(reason = new Error('Local connection closed')) {
     if (lifecycle.signal.aborted) return;
+    if (typeof leaveRelay === 'function') void leaveRelay().catch(() => {});
     lifecycle.abort(reason);
     clearTimeout(setupTimer);
     clearTimeout(incoming?.timer);
@@ -183,6 +184,7 @@ export async function connectLocal({
       while (!lifecycle.signal.aborted) {
         const frame = await readRelay();
         if (lifecycle.signal.aborted) return;
+        if (frame === 'closed') { close(); return; }
         if (!frame?.byteLength) {
           await pause(lifecycle.signal);
           continue;

@@ -103,15 +103,18 @@ test('relay frames move only to the other approved browser and stop when the que
   const frame = Buffer.from([1, 2, 3]);
   assert.throws(() => pairing.pushRelay(owner, frame), { code: 'conflict' });
   pairing.decide(owner, 'approved');
-  assert.equal(pairing.takeRelay(recipient), null);
+  assert.deepEqual(pairing.takeRelay(recipient), { frame: null, closed: false });
   assert.throws(() => pairing.pushRelay(owner, Buffer.alloc(0)), { code: 'invalid' });
   assert.throws(() => pairing.pushRelay(owner, Buffer.alloc(16 * 1024 + 1)), { code: 'invalid' });
   assert.deepEqual(pairing.pushRelay(owner, frame), {});
-  assert.equal(pairing.takeRelay(owner), null);
-  assert.deepEqual(pairing.takeRelay(recipient), frame);
+  assert.equal(pairing.takeRelay(owner).frame, null);
+  assert.equal(pairing.takeRelay(owner).closed, false);
+  assert.deepEqual(pairing.takeRelay(recipient).frame, frame);
+  pairing.markLeft(owner);
+  assert.equal(pairing.takeRelay(recipient).closed, true);
   for (let index = 0; index < 32; index += 1) pairing.pushRelay(recipient, Buffer.from([index]));
   assert.throws(() => pairing.pushRelay(recipient, Buffer.from([32])), { code: 'full' });
-  assert.equal(pairing.takeRelay(owner)[0], 0);
+  assert.equal(pairing.takeRelay(owner).frame[0], 0);
 });
 
 test('signal accepts only the two specified fields and bounds UTF-8 size', () => {

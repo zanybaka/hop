@@ -40,8 +40,15 @@ export async function readRelay(capability, signal) {
     signal, headers: { authorization: 'Bearer ' + capability },
   });
   if (response.status === 204) return null;
+  if (response.status === 410) return 'closed';
   if (!response.ok) throw Error(`Pairing request failed (${response.status})`);
   return new Uint8Array(await response.arrayBuffer());
+}
+
+export function leaveRelay(capability) {
+  return fetch(route + 'leave', {
+    method: 'POST', headers: { authorization: 'Bearer ' + capability },
+  }).then(response => { if (!response.ok) throw Error(`Pairing request failed (${response.status})`); });
 }
 
 export function invitationLink(page, invitation, secret) {

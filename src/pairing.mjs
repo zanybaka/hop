@@ -152,10 +152,17 @@ export function createPairing({ now = Date.now, offerLifetime = 300_000, maxOffe
       queue.push(Buffer.from(bytes));
       return {};
     },
+    markLeft(token) {
+      const { entry, role } = approved(token);
+      entry[role === 'owner' ? 'leftOwner' : 'leftRecipient'] = true;
+      return {};
+    },
     takeRelay(token) {
       const { entry, role } = approved(token);
       const queue = role === 'owner' ? entry.toOwner : entry.toRecipient;
-      return queue?.shift() ?? null;
+      const frame = queue?.shift() ?? null;
+      const otherLeft = role === 'owner' ? Boolean(entry.leftRecipient) : Boolean(entry.leftOwner);
+      return { frame, closed: !frame && otherLeft };
     },
   };
 }
