@@ -175,6 +175,7 @@ dialog::backdrop { background: var(--scrim); }
 }
 @media (max-height: 520px) {
   .head { padding-block: 3px; }
+  .head :is(button, a):focus-visible { outline-offset: -2px; }
   .workspace { gap: 5px; padding-block-start: 5px; }
   #status { min-block-size: 20px; padding-block: 2px; font-size: .875rem; }
   #qr-image, #pair-qr-image { inline-size: min(100%, 225px, calc(100dvh - 130px)); }
