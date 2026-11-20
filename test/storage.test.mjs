@@ -51,6 +51,17 @@ async function until(predicate) {
   assert.fail('storage did not reach the expected state');
 }
 
+test('a slow upload keeps the reserve while bytes continue to arrive', async t => {
+  const { store } = await fixture(t, { lease: 300 });
+  const { token } = store.reserve({ ...initial, bytes: 4 });
+  const stream = new PassThrough();
+  const upload = store.upload(token, stream);
+  stream.write(Buffer.from('ab'));
+  await delay(220);
+  stream.end(Buffer.from('cd'));
+  assert.equal((await upload).version, 1);
+});
+
 test('quota includes published data, concurrent reservations, and pinned readers', async t => {
   const { store } = await fixture(t, { capacity: 12_288 });
   assert.deepEqual(store.usage(), { reserved: 0, allocated: 0 });

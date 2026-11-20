@@ -240,13 +240,22 @@ export async function openStorage(directory, {
   async function write(token, entry, readable) {
     const path = join(blobs, token);
     let bytes = 0;
+    let timer;
+    const arm = () => {
+      clearTimeout(timer);
+      entry.deadline = Math.min(expiresAt(entry.state), now() + lease);
+      timer = setTimeout(() => entry.controller.abort(), Math.max(1, entry.deadline - now()));
+      timer.unref();
+    };
+    arm();
     const bounded = new Transform({ transform(chunk, _encoding, callback) {
       bytes += chunk.length;
       if (bytes > entry.bytes) callback(new StorageError('size'));
-      else callback(null, chunk);
+      else {
+        arm();
+        callback(null, chunk);
+      }
     } });
-    const timer = setTimeout(() => entry.controller.abort(), entry.deadline - now());
-    timer.unref();
     try {
       await pipeline(readable, bounded, createWriteStream(path, { flags: 'wx', mode: 0o600, flush: true }), {
         signal: entry.controller.signal,
