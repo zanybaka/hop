@@ -318,7 +318,8 @@ export async function openStorage(directory, {
     task.then(done, done);
   }
 
-  function openRead(locator) {
+  // head: только метаданные для HEAD. Поток, квитанция и учёт читателя не создаются.
+  function openRead(locator, { head = false } = {}) {
     if (!hexId(locator)) throw new StorageError('invalid');
     const timestamp = now();
     sweep(timestamp);
@@ -331,6 +332,11 @@ export async function openStorage(directory, {
     } catch (error) {
       closeSync(fd);
       throw error;
+    }
+    if (head) {
+      closeSync(fd);
+      return { size: row.size, version: row.version, contentVersion: contentVersion(row.id, row.version),
+        expiresAt: expiresAt(row), receipt: null };
     }
     const stream = createReadStream(path, { fd });
     const held = readers.get(row.blob) ?? new Set();

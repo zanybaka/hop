@@ -157,10 +157,10 @@ export function createPairing({ now = Date.now, offerLifetime = 300_000, maxOffe
       entry[role === 'owner' ? 'leftOwner' : 'leftRecipient'] = true;
       return {};
     },
-    takeRelay(token) {
+    takeRelay(token, { peek = false } = {}) {
       const { entry, role } = approved(token);
       const queue = role === 'owner' ? entry.toOwner : entry.toRecipient;
-      const frame = queue?.shift() ?? null;
+      const frame = (peek ? queue?.[0] : queue?.shift()) ?? null;
       const otherLeft = role === 'owner' ? Boolean(entry.leftRecipient) : Boolean(entry.leftOwner);
       return { frame, closed: !frame && otherLeft };
     },

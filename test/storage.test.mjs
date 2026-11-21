@@ -199,3 +199,17 @@ test('expired data is cleaned from disk while storage is idle', async t => {
   const blobs = join(f.directory, 'blobs');
   await until(async () => (await readdir(blobs)).length === 0);
 });
+
+test('head read returns the metadata of a record without a stream or a receipt', async t => {
+  const { store } = await fixture(t);
+  const { token } = store.reserve({ ...initial, bytes: 5 });
+  await push(store, token, 'first');
+  const full = store.openRead(id);
+  const head = store.openRead(id, { head: true });
+  assert.equal(head.stream, undefined);
+  assert.equal(head.receipt, null);
+  assert.deepEqual({ ...head, receipt: undefined }, { size: full.size, version: full.version,
+    contentVersion: full.contentVersion, expiresAt: full.expiresAt, receipt: undefined });
+  assert.equal((await read(full)).toString(), 'first');
+  assert.throws(() => store.openRead('0'.repeat(64), { head: true }), { code: 'missing' });
+});

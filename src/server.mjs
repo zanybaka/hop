@@ -71,7 +71,9 @@ export async function startServer(directory, {
   async function handle(req, res) {
     const mounted = req.url?.startsWith(basePath + '/');
     const path = mounted ? req.url.slice(basePath.length) : '';
-    const method = req.method;
+    // HEAD идёт тем же путём, что GET. Тело отбрасывает Node, а чтение без побочных эффектов включает флаг head.
+    const head = req.method === 'HEAD';
+    const method = head ? 'GET' : req.method;
     const headers = {
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
@@ -85,8 +87,9 @@ export async function startServer(directory, {
     };
     const json = (status, value, extraHeaders) => {
       if (res.destroyed || res.headersSent) return;
-      res.writeHead(status, { ...headers, 'content-type': 'application/json', ...extraHeaders });
-      res.end(JSON.stringify(value));
+      const body = JSON.stringify(value);
+      res.writeHead(status, { ...headers, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), ...extraHeaders });
+      res.end(body);
     };
     try {
       if (basePath && method === 'GET' && req.url === basePath) {
@@ -97,7 +100,7 @@ export async function startServer(directory, {
       if (method === 'GET' && STATIC.has(path)) {
         const [file, type] = STATIC.get(path);
         const contents = await readFile(new URL(file.startsWith('../') ? file : './' + file, import.meta.url));
-        res.writeHead(200, { ...headers, 'content-type': type });
+        res.writeHead(200, { ...headers, 'content-type': type, 'content-length': contents.length });
         res.end(contents);
         return;
       }
@@ -176,14 +179,15 @@ export async function startServer(directory, {
       }
       const record = /^\/api\/v1\/records\/([a-f0-9]{64})$/.exec(path);
       if (record && method === 'GET') {
-        const result = storage.openRead(record[1]);
+        const result = storage.openRead(record[1], { head });
         res.writeHead(200, {
           ...headers, 'content-type': 'application/octet-stream', 'content-length': result.size,
           'x-hop-version': result.version, 'x-hop-expires-at': result.expiresAt,
           ...(result.contentVersion !== result.version && { 'x-hop-content-version': result.contentVersion }),
           ...(result.receipt && { 'x-hop-receipt': result.receipt }),
         });
-        await pipeline(result.stream, res);
+        if (head) res.end();
+        else await pipeline(result.stream, res);
         return;
       }
       const receipt = /^\/api\/v1\/receipts\/([a-f0-9-]{36})$/.exec(path);
@@ -221,7 +225,7 @@ export async function startServer(directory, {
         if (route === 'signal' && method === 'POST') return json(200, pairing.writeSignal(bearer, await jsonBody(req, 400_000)));
         if (route === 'leave' && method === 'POST') return json(200, pairing.markLeft(bearer));
         if (route === 'relay' && method === 'GET') {
-          const result = pairing.takeRelay(bearer);
+          const result = pairing.takeRelay(bearer, { peek: head });
           if (result.closed) {
             res.writeHead(410, headers);
             res.end();
