@@ -1,0 +1,24 @@
+# Пути, которые Semgrep не сканирует. Свой .semgrepignore заменяет встроенный список
+# Semgrep целиком, поэтому встроенные пути (Semgrep 1.182.0) перенесены сюда явно.
+:include .gitignore
+.git/
+node_modules/
+build/
+dist/
+vendor/
+.env/
+.venv/
+.tox/
+*.min.js
+.npm/
+.yarn/
+test/
+tests/
+*_test.go
+.semgrep
+.semgrep_logs/
+
+# Сторонний скилл Impeccable для агента разработки. Его скрипты запускаются только на машине
+# разработчика, в образ сайта не входят (Dockerfile копирует src, web и deploy/entrypoint.sh),
+# и правятся они только обновлением скилла, поэтому nosemgrep в них не ставится.
+.agents/
