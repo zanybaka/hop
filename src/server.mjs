@@ -77,7 +77,11 @@ export async function startServer(directory, {
       'referrer-policy': 'no-referrer',
       'strict-transport-security': 'max-age=31536000',
       'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' blob:; script-src 'self'",
+      'content-security-policy': "default-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; img-src 'self' blob:; script-src 'self'",
+      'cross-origin-opener-policy': 'same-origin',
+      'cross-origin-resource-policy': 'same-origin',
+      // Приложению не нужны камера, микрофон и другие устройства; копирование ссылки остаётся.
+      'permissions-policy': 'accelerometer=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=(), clipboard-write=(self)',
     };
     const json = (status, value, extraHeaders) => {
       if (res.destroyed || res.headersSent) return;

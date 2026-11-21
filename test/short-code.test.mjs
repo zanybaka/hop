@@ -34,6 +34,13 @@ test('short code routes authenticate publication, survive rotation and restart, 
     assert.equal((await fetch(app.origin + '/api/v1/uploads/' + token, { method: 'PUT', body: encrypted })).status, 201);
     const keysResponse = await request(codeApi + 'keys');
     assert.equal(keysResponse.headers.get('strict-transport-security'), 'max-age=31536000');
+    assert.match(keysResponse.headers.get('content-security-policy'), /form-action 'self'/);
+    assert.equal(keysResponse.headers.get('cross-origin-opener-policy'), 'same-origin');
+    assert.equal(keysResponse.headers.get('cross-origin-resource-policy'), 'same-origin');
+    assert.match(keysResponse.headers.get('permissions-policy'), /camera=\(\).*microphone=\(\)/);
+    const page = await fetch(app.origin + '/app.mjs');
+    assert.equal(page.headers.get('cross-origin-opener-policy'), 'same-origin');
+    assert.match(page.headers.get('permissions-policy'), /geolocation=\(\)/);
     const [first] = await keysResponse.json();
     const code = newCode(first.epoch);
     assert.equal(normalizeCode(code.slice(0, 4).toLowerCase() + '-' + code.slice(4)), code);
