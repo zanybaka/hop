@@ -335,7 +335,7 @@ Depends on:
 Agent: auto
 Verify: node --test test/storage.test.mjs
 
-- [ ] HOP-025 Сервер отвечает на HEAD так же, как на GET
+- [x] HOP-025 Сервер отвечает на HEAD так же, как на GET
 Task Context
 2026-11-22: запрос HEAD к корню сайта и к /app.mjs получает 404, а GET к тем же адресам 200 с теми же заголовками. src/server.mjs сравнивает метод только с GET, поэтому HEAD падает в ответ "не найдено". Проверки доступности и кэши, которые спрашивают HEAD, видят страницу пропавшей.
 Task DOD
@@ -345,4 +345,4 @@ Size: S
 Depends on:
 Agent: auto
 Verify: node --test test/
-Progress: 2026-11-22. Код в main (57ba817), тесты зелёные (51 из 51), образ Build image собран. На https://hop.pohub.ru ещё работает b39fbc9: HEAD к /app.mjs даёт 404. Остаётся подтверждение выкладки образа sha-57ba81795a34 на прод в потоке платформы и проверка HEAD / и HEAD /app.mjs на живом (ожидается 200 без тела).
+Progress: 2026-11-22. Выложено на https://hop.pohub.ru, /version.json отдаёт 57ba81795a34. Измерено на живом: HEAD к /, /app.mjs и /api/v1/short-code/keys даёт 200, те же content-type и content-length, что у GET, тело пустое. POST к / по-прежнему 404.
