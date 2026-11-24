@@ -1,0 +1,45 @@
+name: GHCR cleanup
+# Чистка образов репозитория в GHCR раз в сутки (scripts/ghcr-cleanup.mjs): хранить 10 последних
+# образов с тегом, образы трёх последних production-выкаток и закреплённые теги из PROTECT_TAGS,
+# остальное удалять. Вручную - с флагом dry_run, чтобы сначала посмотреть, что удалится.
+# Репозиторий публичный, поэтому раннер облачный. Скрипт берётся одним файлом через API.
+on:
+  schedule:
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "только показать, что удалится"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+  deployments: read
+
+# Два прогона чистки одного пакета внахлёст удаляли бы одно и то же.
+concurrency:
+  group: ghcr-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Delete old image versions
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '' }}
+          # Пакеты, которые заливает этот репозиторий (имена в ghcr.io/<владелец>/).
+          PACKAGES: "hop"
+          # Теги, которые остаются при любом возрасте. Пока выкатки не записываются в GitHub
+          # deployments, здесь тег ревизии, работающей в проде (/version.json), от 2026-11-25.
+          PROTECT_TAGS: "sha-57ba81795a34"
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/ghcr-cleanup"; rm -rf "$D"; mkdir -p "$D/scripts"; cd "$D"
+          curl -sf --retry 3 --max-time 60 -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/contents/scripts/ghcr-cleanup.mjs?ref=main" -o scripts/ghcr-cleanup.mjs
+          node scripts/ghcr-cleanup.mjs
